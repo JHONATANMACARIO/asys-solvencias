@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Registro de baja · Desarrollo Humano · ASYS</title>
+  <link rel="stylesheet" href="assets/asys-forms.css">
+</head>
+<body class="theme-ddhh">
+  <section class="landing landing-brand" data-screen="landing">
+    <nav class="landing-nav">
+      <div class="brand">
+        <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3h10l4 4v14H5z"/><path d="M15 3v5h5M8 12h8M8 16h6"/></svg></span>
+        <span class="brand-copy">ASYS<small>Desarrollo Humano</small></span>
+      </div>
+    </nav>
+
+    <main class="hero hero-brand">
+      <div class="hero-copy">
+        <h1>Una baja bien gestionada empieza con <span>datos correctos.</span></h1>
+        <p class="hero-lead">Registra el movimiento, valida al colaborador contra el maestro único y activa las solicitudes de solvencia para Líder y Workforce.</p>
+        <div class="hero-actions">
+          <button class="btn btn-primary brand-cta" type="button" data-action="start">Iniciar registro<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+        </div>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <div class="orb"></div>
+        <article class="product-card product-card-brand">
+          <div class="product-card-top">
+            <span class="product-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3h10l4 4v14H5z"/><path d="M15 3v5h5M8 12h8M8 16h6"/></svg></span>
+            <span class="pill"><span class="pill-dot"></span>Disponible</span>
+          </div>
+          <h2>Registro de baja</h2>
+          <p>Captura inicial controlada por Desarrollo Humano.</p>
+          <div class="brand-card-accent"><span></span><span></span><span></span></div>
+        </article>
+        <span class="floating-note note-one"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg>Validación automática</span>
+        <span class="floating-note note-two"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 8h14M5 16h14"/></svg>Fuente maestra única</span>
+      </div>
+    </main>
+    <footer class="landing-footer"><span>ASYS · Flujo de bajas 2026</span><span>Datos de demostración · Sustituibles desde el Excel maestro</span></footer>
+  </section>
+
+  <section class="app" data-screen="form" hidden>
+    <nav class="app-nav app-nav-clean">
+      <div class="brand brand-minimal"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3h10l4 4v14H5z"/><path d="M15 3v5h5"/></svg></span><span>ASYS</span></div>
+      <button class="btn btn-ghost" type="button" data-action="home">Cerrar</button>
+    </nav>
+    <div class="progress-wrap"><div class="progress-bar" data-progress></div></div>
+
+    <main class="app-main app-main-clean">
+      <header class="form-hero form-hero-clean"><div><h1>Registro de baja</h1><p>Selecciona al colaborador y completa únicamente los datos de la baja.</p></div></header>
+
+      <form data-asys-form novalidate>
+        <div class="form-layout form-layout-single">
+          <div class="form-stack">
+            <section class="form-card">
+              <header class="card-head"><span class="section-number">01</span><div><h2>Datos del colaborador</h2><p>El maestro completa los datos al seleccionar el código; puedes corregirlos si es necesario.</p></div></header>
+              <div class="grid">
+                <div class="field col-6"><label for="pais">País <span class="required">*</span></label><select id="pais" name="PAIS_NOMBRE" data-employee-field="PAIS_NOMBRE" required><option value="">Seleccionar</option><option>Guatemala</option><option>Costa Rica</option><option>El Salvador</option><option>Honduras</option><option>Nicaragua</option><option>Panamá</option><option>Paraguay</option><option>TYT</option><option>Jamaica</option></select></div>
+                <div class="field col-6"><label for="empresa">Empresa <span class="required">*</span></label><select id="empresa" name="EMPRESA" data-employee-field="EMPRESA" required><option value="">Seleccionar</option><option>CUENTAME</option><option>ASEGURO</option><option>EASYS</option><option>ASI</option><option>GURO</option><option>AJUSTADORES</option></select></div>
+                <div class="field col-12">
+                  <label for="codigo">Código de empleado <span class="required">*</span></label>
+                  <div class="lookup"><svg class="lookup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input class="control" id="codigo" name="CODIGO_EMPLEADO" data-employee-code list="employeeCodes" placeholder="Ejemplo: DEMO-GT-0001" autocomplete="off" required><datalist id="employeeCodes"></datalist></div>
+                </div>
+              </div>
+              <div class="grid employee-fields">
+                <div class="field col-6"><label for="nombreCompleto">Nombre completo <span class="required">*</span></label><input class="control" id="nombreCompleto" name="NOMBRE_COMPLETO" data-employee-field="NOMBRE_COMPLETO" required></div>
+                <div class="field col-6"><label for="puesto">Puesto <span class="required">*</span></label><input class="control" id="puesto" name="PUESTO" data-employee-field="PUESTO" required></div>
+                <div class="field col-6"><label for="fechaIngreso">Fecha de ingreso <span class="required">*</span></label><input class="control" type="date" id="fechaIngreso" name="FECHA_INGRESO" data-employee-field="FECHA_INGRESO" required></div>
+              </div>
+            </section>
+
+            <section class="form-card">
+              <header class="card-head"><span class="section-number">02</span><div><h2>Datos de la salida</h2><p>Indica la fecha y el motivo formal de la salida.</p></div></header>
+              <div class="grid">
+                <div class="field col-6"><label for="fechaSalida">Fecha de salida <span class="required">*</span></label><input class="control" type="date" id="fechaSalida" name="FECHA_SALIDA" required></div>
+                <div class="field col-6"><label for="motivoSalida">Motivo de salida <span class="required">*</span></label><select id="motivoSalida" name="MOTIVO_SALIDA" required><option value="">Seleccionar</option><option>Renuncia</option><option>Despido con responsabilidad patronal</option><option>Despido sin responsabilidad patronal</option><option>Mutuo acuerdo</option><option>Jubilación</option></select></div>
+              </div>
+            </section>
+
+            <section class="form-card">
+              <header class="card-head"><span class="section-number">03</span><div><h2>Montos pendientes</h2><p>Escribe cero cuando el concepto no aplique.</p></div></header>
+              <div class="grid">
+                <div class="field col-4"><label for="vacacionesMonto">Vacaciones <span class="required">*</span></label><div class="input-wrap"><input class="control" type="number" min="0" step="0.01" id="vacacionesMonto" name="VACACIONES_MONTO" value="0" required><span class="input-suffix" data-employee-text="MONEDA">&#8212;</span></div></div>
+                <div class="field col-4"><label for="cafeteriaMonto">Cafetería <span class="required">*</span></label><div class="input-wrap"><input class="control" type="number" min="0" step="0.01" id="cafeteriaMonto" name="CAFETERIA_MONTO" value="0" required><span class="input-suffix" data-employee-text="MONEDA">&#8212;</span></div></div>
+                <div class="field col-4"><label for="otrosMonto">Otros <span class="required">*</span></label><div class="input-wrap"><input class="control" type="number" min="0" step="0.01" id="otrosMonto" name="OTROS_MONTO" value="0" required><span class="input-suffix" data-employee-text="MONEDA">&#8212;</span></div></div>
+              </div>
+            </section>
+
+            <section class="form-card">
+              <header class="card-head"><span class="section-number">04</span><div><h2>Correos responsables</h2><p>Se completan desde el maestro y pueden corregirse antes de guardar.</p></div></header>
+              <div class="grid">
+                <div class="field col-6"><label for="correoLider">Correo del líder <span class="required">*</span></label><input class="control" type="email" id="correoLider" name="CORREO_LIDER" data-employee-field="LIDER_CORREO" required></div>
+                <div class="field col-6"><label for="correoWorkforce">Correo de Workforce <span class="required">*</span></label><input class="control" type="email" id="correoWorkforce" name="CORREO_WORKFORCE" data-employee-field="ANALISTA_WF_CORREO" required></div>
+              </div>
+            </section>
+
+            <footer class="form-actions"><button class="btn btn-primary form-submit" type="submit">Guardar registro<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></footer>
+          </div>
+        </div>
+      </form>
+    </main>
+  </section>
+
+  <div class="toast" data-toast><span class="toast-icon">&#10003;</span><div><strong>Listo</strong><span>Operación completada.</span></div></div>
+  <script src="assets/colaboradores.js"></script>
+  <script src="assets/asys-forms-sharepoint.js"></script>
+  <script>ASYSForms.init({ type: 'REGISTRO_DDHH', casePrefix: 'BAJA', filePrefix: 'RESPUESTA_DDHH' });</script>
+</body>
+</html>
