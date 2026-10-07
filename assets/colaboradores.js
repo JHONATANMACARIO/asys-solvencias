@@ -1,6 +1,6 @@
 /* Generado automáticamente desde MAESTRO_COLABORADORES.xlsx. No editar manualmente. */
 window.ASYS_COLABORADORES_META = {
-  "generatedAt": "2026-10-07T21:06:18.236Z",
+  "generatedAt": "2026-10-07T21:11:37.190Z",
   "source": "full_hc_data_v3.js",
   "sourcePeriod": "2026-08",
   "total": 784,
