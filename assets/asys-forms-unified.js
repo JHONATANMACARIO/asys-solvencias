@@ -1,791 +1,691 @@
 /**
- * ASYS Forms - Implementación Unificada V4.2
- * ===========================================
- * 
- * Versión canónica que reemplaza asys-forms.js y asys-forms-sharepoint.js
- * 
- * Características:
- * - Soporte para DDHH, Líder y Workforce
- * - Configuración de webhooks externa (webhook-config.js)
- * - Sin dependencia de localStorage para validación de casos
- * - Validación de datos en frontend (backend es fuente de verdad)
- * - Utilidades compartidas (formateo, lookup, generación de IDs)
- * - Protección anti-DEMO en modo producción (v4.2+)
- * 
- * IMPORTANTE: Requiere que los siguientes scripts se carguen antes:
- * - assets/colaboradores.js
- * - assets/webhook-config.js
- * 
- * MODO PRODUCCIÓN:
- * Para activar validaciones anti-DEMO, definir:
- *   window.ASYS_PRODUCTION_MODE = true;
- * antes de cargar este script.
+ * ASYS · Formularios Fase 1 (DDHH, Líder, Workforce)
+ *
+ * Requiere, en este orden:
+ *   assets/colaboradores.js   -> window.ASYS_COLABORADORES
+ *   assets/catalogos.js       -> window.ASYS_CATALOGOS (opcional)
+ *   assets/entorno-loader.js  -> window.ASYS_PRODUCTION_MODE
+ *   assets/webhook-config.js  -> window.ASYS_WEBHOOK_CONFIG
  */
-
-(function() {
+(function () {
   'use strict';
 
-  // ============================================
-  // CONSTANTES Y CONFIGURACIÓN
-  // ============================================
-  
+  const VERSION = '4.3.0';
+
   const FORM_TYPES = {
-    REGISTRO_DDHH: {
-      webhookKey: 'REGISTRO_DDHH',
-      casePrefix: 'BAJA',
-      responsePrefix: 'RESPONSE_ID_DDHH',
-      canCreateCase: true
-    },
-    SOLVENCIA_LIDER: {
-      webhookKey: 'SOLVENCIA_LIDER',
-      casePrefix: 'LIDER',
-      responsePrefix: 'RESPONSE_ID_LIDER',
-      canCreateCase: false  // Solo puede responder a casos existentes
-    },
-    SOLVENCIA_WORKFORCE: {
-      webhookKey: 'SOLVENCIA_WORKFORCE',
-      casePrefix: 'WF',
-      responsePrefix: 'RESPONSE_ID_WORKFORCE',
-      canCreateCase: false  // Solo puede responder a casos existentes
-    }
+    REGISTRO_DDHH: { webhookKey: 'REGISTRO_DDHH', casePrefix: 'BAJA', responseKey: 'RESPONSE_ID_DDHH', label: 'Registro DDHH' },
+    SOLVENCIA_LIDER: { webhookKey: 'SOLVENCIA_LIDER', casePrefix: 'LIDER', responseKey: 'RESPONSE_ID_LIDER', label: 'Solvencia del líder' },
+    SOLVENCIA_WORKFORCE: { webhookKey: 'SOLVENCIA_WORKFORCE', casePrefix: 'WF', responseKey: 'RESPONSE_ID_WORKFORCE', label: 'Solvencia Workforce' }
   };
 
-  // ============================================
-  // ESTADO GLOBAL
-  // ============================================
-  
   let currentFormType = null;
   let currentEmployee = null;
-  let currentScreen = 'landing';
+  let submitting = false;
 
-  // ============================================
-  // UTILIDADES - EMPLEADOS
-  // ============================================
-  
+  // ------------------------------------------------------------------
+  // Maestro de colaboradores
+  // ------------------------------------------------------------------
   const employees = Array.isArray(window.ASYS_COLABORADORES) ? window.ASYS_COLABORADORES : [];
-  const employeesByCode = new Map(
-    employees.map(emp => [normalizeCode(emp.CODIGO_EMPLEADO), emp])
-  );
+  const byLookupKey = new Map();
+  const byCode = new Map();
+  const searchIndex = [];
+  employees.forEach((emp) => {
+    const code = normalizeCode(emp.CODIGO_EMPLEADO);
+    if (!code) return;
+    byLookupKey.set(normalizeCode(emp.CLAVE_BUSQUEDA || emp.CODIGO_EMPLEADO), emp);
+    if (!byCode.has(code)) byCode.set(code, []);
+    byCode.get(code).push(emp);
+    searchIndex.push({
+      emp,
+      text: normalizeSearch([emp.CODIGO_EMPLEADO, emp.NOMBRE_COMPLETO, emp.PAIS_NOMBRE, emp.EMPRESA].filter(Boolean).join(' '))
+    });
+  });
 
-  function normalizeCode(code) {
-    return String(code || '').trim().toUpperCase();
+  function normalizeCode(value) {
+    return String(value ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
   }
 
-  function findEmployee(code) {
-    const employee = employeesByCode.get(normalizeCode(code));
-    if (!employee) return null;
-    
-    // Solo retornar si está activo
-    const estado = String(employee.ESTADO_COLABORADOR || '').toUpperCase();
-    if (estado !== 'ACTIVO') return null;
-    
-    // PRODUCCIÓN: Bloquear datos DEMO (códigos DEMO-*, emails @example.invalid)
+  function normalizeSearch(value) {
+    return normalizeCode(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+
+  function isAllowed(emp) {
+    if (!emp) return false;
+    if (String(emp.ESTADO_COLABORADOR || '').toUpperCase() === 'INACTIVO') return false;
     if (window.ASYS_PRODUCTION_MODE === true) {
-      const codigo = String(employee.CODIGO_EMPLEADO || '').toUpperCase();
-      const email = String(employee.CORREO_COLABORADOR || '').toLowerCase();
-      
-      if (codigo.startsWith('DEMO-')) {
-        console.warn(`[ASYS] Código DEMO bloqueado en modo producción: ${codigo}`);
-        return null;
-      }
-      
-      if (email.includes('example.invalid')) {
-        console.warn(`[ASYS] Email DEMO bloqueado en modo producción: ${email}`);
-        return null;
-      }
+      if (String(emp.CODIGO_EMPLEADO || '').toUpperCase().startsWith('DEMO-')) return false;
+      if (String(emp.CORREO_COLABORADOR || '').toLowerCase().includes('example.invalid')) return false;
     }
-    
-    return employee;
+    return true;
   }
 
-  function loadEmployeeCodes() {
-    const datalist = document.getElementById('employeeCodes');
-    if (!datalist) return;
+  /** Todas las personas que coinciden con lo escrito (clave exacta o código). */
+  function findCandidates(value) {
+    const key = normalizeCode(value);
+    if (!key) return [];
+    const exact = byLookupKey.get(key);
+    if (exact) return isAllowed(exact) ? [exact] : [];
+    const codePart = key.split('|')[0].trim();
+    return (byCode.get(codePart) || []).filter(isAllowed);
+  }
 
-    datalist.innerHTML = '';
-    employees.forEach(emp => {
-      const option = document.createElement('option');
-      option.value = emp.CODIGO_EMPLEADO;
-      option.textContent = `${emp.CODIGO_EMPLEADO} — ${emp.NOMBRE_COMPLETO}`;
-      datalist.appendChild(option);
+  /** Búsqueda parcial rápida por código, nombre, país o empresa. */
+  function findSuggestions(value) {
+    const terms = normalizeSearch(value).split(' ').filter(Boolean);
+    if (!terms.length || normalizeSearch(value).length < 2) return [];
+    const matches = [];
+    for (const entry of searchIndex) {
+      if (isAllowed(entry.emp) && terms.every((term) => entry.text.includes(term))) matches.push(entry.emp);
+    }
+    return matches.sort((a, b) => {
+      const activeA = String(a.ESTADO_COLABORADOR).toUpperCase() === 'ACTIVO' ? 0 : 1;
+      const activeB = String(b.ESTADO_COLABORADOR).toUpperCase() === 'ACTIVO' ? 0 : 1;
+      return activeA - activeB || String(a.NOMBRE_COMPLETO).localeCompare(String(b.NOMBRE_COMPLETO), 'es');
     });
   }
 
-  function populateEmployeeData(employee) {
-    if (!employee) return;
-    
-    currentEmployee = employee;
-    
-    // Poblar campos editables
-    document.querySelectorAll('[data-employee-field]').forEach(field => {
-      const fieldName = field.getAttribute('data-employee-field');
-      if (employee[fieldName] !== undefined) {
-        let value = employee[fieldName];
-        
-        // Formatear fechas para input type="date"
-        if (field.type === 'date' && value && typeof value === 'string' && value.includes('T')) {
-          value = value.split('T')[0];
-        }
-        
-        field.value = value;
-        field.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    });
-
-    // Poblar campos de solo lectura
-    document.querySelectorAll('[data-employee-text]').forEach(elem => {
-      const fieldName = elem.getAttribute('data-employee-text');
-      if (employee[fieldName] !== undefined) {
-        elem.textContent = employee[fieldName] || '—';
-      }
-    });
-
-    // Trigger evento personalizado
-    document.dispatchEvent(new CustomEvent('asys:employee-loaded', { detail: employee }));
+  /** Devuelve la persona sólo si la búsqueda es inequívoca. */
+  function findEmployee(value) {
+    const matches = findCandidates(value);
+    return matches.length === 1 ? matches[0] : null;
   }
 
-  // ============================================
-  // UTILIDADES - FORMATEO
-  // ============================================
-  
+  // ------------------------------------------------------------------
+  // Utilidades
+  // ------------------------------------------------------------------
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
   function formatDate(value) {
     if (!value) return '—';
-    const raw = String(value).slice(0, 10);
-    const [year, month, day] = raw.split('-').map(Number);
-    if (!year || !month || !day) return raw;
-    
-    return new Intl.DateTimeFormat('es-GT', { 
-      day: '2-digit', 
-      month: 'short', 
-      year: 'numeric' 
-    }).format(new Date(year, month - 1, day));
+    const [y, m, d] = String(value).slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return String(value);
+    return new Intl.DateTimeFormat('es-GT', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(y, m - 1, d));
   }
 
   function formatMoney(value, currency = 'GTQ') {
     const amount = Number(value || 0);
     const locale = currency === 'CRC' ? 'es-CR' : 'es-GT';
-    
     try {
-      return new Intl.NumberFormat(locale, { 
-        style: 'currency', 
-        currency, 
-        maximumFractionDigits: 2 
-      }).format(amount);
+      return new Intl.NumberFormat(locale, { style: 'currency', currency, maximumFractionDigits: 2 }).format(amount);
     } catch {
       return `${currency} ${amount.toLocaleString(locale)}`;
     }
   }
 
-  // ============================================
-  // UTILIDADES - IDS Y CLAVES
-  // ============================================
-  
-  function generateUniqueId(prefix = 'BAJA') {
-    const timestamp = Date.now();
-    const random = Math.floor(Math.random() * 10000);
-    return `${prefix}-${timestamp}-${random}`;
-  }
-
-  function generateShortGuid() {
-    if (window.crypto?.randomUUID) {
-      return window.crypto.randomUUID().replaceAll('-', '').slice(0, 8).toUpperCase();
-    }
+  function shortGuid() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID().replaceAll('-', '').slice(0, 8).toUpperCase();
     return Math.random().toString(36).slice(2, 10).toUpperCase().padEnd(8, '0');
   }
 
-  // ============================================
-  // VALIDACIÓN DE WEBHOOKS
-  // ============================================
-  
-  function validateWebhookConfig(formType) {
-    if (!window.ASYS_WEBHOOK_CONFIG) {
-      return {
-        valid: false,
-        message: 'webhook-config.js no está cargado. Agrega <script src="assets/webhook-config.js"></script> antes de este archivo.'
-      };
-    }
-
-    const config = FORM_TYPES[formType];
-    if (!config) {
-      return {
-        valid: false,
-        message: `Tipo de formulario desconocido: ${formType}`
-      };
-    }
-
-    const webhookKey = config.webhookKey;
-    const url = window.ASYS_WEBHOOK_CONFIG[webhookKey];
-
-    if (!url || url.startsWith('URL_WEBHOOK_') || url.startsWith('PENDIENTE_')) {
-      return {
-        valid: false,
-        message: `Webhook ${webhookKey} no configurado. Consulta webhook-config.example.js para instrucciones.`
-      };
-    }
-
-    return { valid: true };
+  function uniqueId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   }
 
-  function getWebhookURL(formType) {
-    const config = FORM_TYPES[formType];
-    if (!config) {
-      throw new Error(`Tipo de formulario desconocido: ${formType}`);
-    }
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-    const url = window.ASYS_WEBHOOK_CONFIG[config.webhookKey];
-    
-    if (!url || url.startsWith('URL_WEBHOOK_') || url.startsWith('PENDIENTE_')) {
-      throw new Error(`Webhook ${config.webhookKey} no configurado`);
-    }
+  // ------------------------------------------------------------------
+  // Mensajes en pantalla
+  // ------------------------------------------------------------------
+  let toastTimer = null;
+  function showToast(message, type = 'info') {
+    const toast = $('[data-toast]');
+    if (!toast) return;
+    toast.className = `toast ${type}`;
+    toast.textContent = '';
+    const title = document.createElement('strong');
+    title.textContent = type === 'error' ? 'Revisa esto' : type === 'success' ? 'Listo' : 'Aviso';
+    const body = document.createElement('span');
+    body.textContent = message;
+    toast.append(title, body);
+    void toast.offsetWidth;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), type === 'error' ? 7000 : 4000);
+  }
 
+  function showBanner(title, message, variant = 'warn') {
+    const host = $('[data-banner]');
+    if (!host) return;
+    const box = document.createElement('div');
+    box.className = variant === 'info' ? 'banner banner-info' : 'banner';
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    const text = document.createElement('span');
+    text.textContent = message;
+    box.append(strong, text);
+    host.appendChild(box);
+  }
+
+  function showScreen(name) {
+    const target = $(`[data-screen="${name}"]`);
+    if (!target) return;
+    $$('[data-screen]').forEach((el) => { el.hidden = el !== target; });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // ------------------------------------------------------------------
+  // Webhooks
+  // ------------------------------------------------------------------
+  function webhookURL(formType) {
+    const cfg = FORM_TYPES[formType];
+    const url = cfg && window.ASYS_WEBHOOK_CONFIG ? window.ASYS_WEBHOOK_CONFIG[cfg.webhookKey] : null;
+    if (!url || typeof url !== 'string' || !url.startsWith('https://')) return null;
     return url;
   }
 
-  // ============================================
-  // NAVEGACIÓN Y UI
-  // ============================================
-  
-  function showScreen(screenName) {
-    document.querySelectorAll('[data-screen]').forEach(s => s.hidden = true);
-    const screen = document.querySelector(`[data-screen="${screenName}"]`);
-    if (screen) {
-      screen.hidden = false;
-      currentScreen = screenName;
+  async function sendToWebhook(data, url) {
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+    } catch {
+      const error = new Error('No se pudo conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.');
+      error.status = 0;
+      throw error;
+    }
+    const text = await response.text();
+    let body = {};
+    try { body = text ? JSON.parse(text) : {}; } catch { body = { mensaje: text }; }
+    if (!response.ok || body.ok === false) {
+      const error = new Error(String(body.mensaje || body.message || body.error?.message || '').slice(0, 200));
+      error.status = response.status;
+      throw error;
+    }
+    return body;
+  }
+
+  function friendlyError(error) {
+    switch (error.status) {
+      case 0: return error.message;
+      case 400: return error.message || 'Algún dato no es válido. Revisa el formulario.';
+      case 401:
+      case 403: return 'El enlace no es válido o ya venció. Usa el enlace que llegó por correo.';
+      case 404: return 'El caso no existe o ya fue cerrado.';
+      case 409: return error.message || 'Ya existe un registro para este colaborador.';
+      default: return 'El servidor no pudo guardar el registro. Inténtalo de nuevo en unos minutos.';
     }
   }
 
-  function showToast(message, type = 'success') {
-    const toast = document.querySelector('[data-toast]');
-    if (!toast) return;
-    
-    const icon = type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ';
-    toast.innerHTML = `
-      <span class="toast-icon">${icon}</span>
-      <div>
-        <strong>${type === 'success' ? 'Éxito' : type === 'error' ? 'Error' : 'Info'}</strong>
-        <span>${message}</span>
-      </div>
-    `;
-    
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 4000);
+  // ------------------------------------------------------------------
+  // Colaborador: búsqueda y llenado
+  // ------------------------------------------------------------------
+  function setLookupStatus(text, kind = '') {
+    const el = $('[data-lookup-status]');
+    if (!el) return;
+    el.textContent = text;
+    el.className = `lookup-status ${kind}`.trim();
   }
 
-  function updateProgress() {
-    const form = document.querySelector('form[data-asys-form]');
-    const bar = document.querySelector('[data-progress]');
-    if (!form || !bar) return;
+  function clearMatches() {
+    const host = $('[data-lookup-matches]');
+    if (host) host.textContent = '';
+  }
 
-    const required = Array.from(form.querySelectorAll('[required]')).filter(
-      field => field.offsetParent !== null
-    );
+  function ensureOption(select, value) {
+    if (!value) return;
+    const exists = Array.from(select.options).some((opt) => opt.value === value || opt.text === value);
+    if (!exists) {
+      const opt = document.createElement('option');
+      opt.textContent = value;
+      select.appendChild(opt);
+    }
+  }
 
-    let filled = 0;
-    required.forEach(field => {
-      if (field.type === 'radio' || field.type === 'checkbox') {
-        if (form.querySelector(`[name="${CSS.escape(field.name)}"]:checked`)) {
-          filled++;
-        }
-      } else if (field.value.trim() && field.checkValidity()) {
-        filled++;
-      }
+  function populateEmployeeData(emp) {
+    currentEmployee = emp || null;
+    $$('[data-employee-field]').forEach((field) => {
+      const key = field.getAttribute('data-employee-field');
+      let value = emp ? (emp[key] ?? '') : '';
+      if (field.type === 'date' && typeof value === 'string') value = value.slice(0, 10);
+      // Para correos editables, no borres lo que la persona ya escribió si el maestro viene vacío.
+      if (emp && !value && !field.readOnly && field.type === 'email') return;
+      if (field.tagName === 'SELECT') ensureOption(field, value);
+      field.value = value;
+      field.classList.remove('invalid');
     });
-
-    const progress = required.length > 0 ? Math.round((filled / required.length) * 100) : 0;
-    bar.style.width = `${progress}%`;
+    $$('[data-employee-text]').forEach((el) => {
+      const key = el.getAttribute('data-employee-text');
+      el.textContent = emp ? (emp[key] || '') : '';
+    });
+    if (emp) document.dispatchEvent(new CustomEvent('asys:employee-loaded', { detail: emp }));
   }
 
-  // ============================================
-  // VALIDACIÓN DE FORMULARIO
-  // ============================================
-  
-  /**
-   * Validaciones de negocio específicas
-   */
+  function selectEmployee(emp) {
+    const input = $('[data-employee-code]');
+    clearMatches();
+    populateEmployeeData(emp);
+    if (input) {
+      input.value = emp.CODIGO_EMPLEADO;
+      input.classList.remove('invalid');
+      lastLookupKey = normalizeCode(emp.CODIGO_EMPLEADO);
+    }
+    const historico = String(emp.ESTADO_COLABORADOR || '').toUpperCase() === 'HISTORICO';
+    setLookupStatus(`${emp.NOMBRE_COMPLETO} · ${emp.PAIS_NOMBRE || ''}${historico ? ' · ya no aparece en el HC más reciente' : ''}`, 'ok');
+  }
+
+  function showMatches(matches) {
+    const host = $('[data-lookup-matches]');
+    if (!host) return;
+    host.textContent = '';
+    matches.slice(0, 12).forEach((emp) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const name = document.createElement('span');
+      name.textContent = emp.NOMBRE_COMPLETO;
+      const meta = document.createElement('small');
+      meta.textContent = [emp.PAIS_NOMBRE, emp.EMPRESA, emp.PUESTO].filter(Boolean).join(' · ');
+      btn.append(name, meta);
+      btn.addEventListener('click', () => selectEmployee(emp));
+      host.appendChild(btn);
+    });
+  }
+
+  // Evita reprocesar el mismo valor: al hacer clic en una opción, el campo pierde el foco
+  // y dispara "change"; si se redibujaran las opciones, el clic se perdería.
+  let lastLookupKey = null;
+
+  function handleLookupInput(final = false) {
+    const input = $('[data-employee-code]');
+    if (!input) return;
+    const value = input.value;
+    const key = normalizeCode(value);
+    if (key === lastLookupKey && !(final && !key)) {
+      if (final && key && !currentEmployee && !findCandidates(value).length) input.classList.add('invalid');
+      return;
+    }
+    lastLookupKey = key;
+
+    // Si cambió el código, el colaborador cargado ya no aplica.
+    if (currentEmployee && key !== normalizeCode(currentEmployee.CODIGO_EMPLEADO) &&
+        key !== normalizeCode(currentEmployee.CLAVE_BUSQUEDA)) {
+      populateEmployeeData(null);
+    }
+
+    clearMatches();
+    if (!key) { setLookupStatus(''); return; }
+
+    const matches = findCandidates(value);
+    if (matches.length === 1) { selectEmployee(matches[0]); return; }
+    if (matches.length > 1) {
+      setLookupStatus(`Hay ${matches.length} personas con el código ${key.split('|')[0].trim()}. Elige la correcta:`);
+      showMatches(matches);
+      return;
+    }
+
+    const suggestions = findSuggestions(value);
+    if (suggestions.length) {
+      const shown = Math.min(suggestions.length, 12);
+      setLookupStatus(`${suggestions.length} coincidencia${suggestions.length === 1 ? '' : 's'}; mostrando ${shown}.`);
+      showMatches(suggestions);
+      return;
+    }
+
+    if (final || key.length >= 4) {
+      setLookupStatus('No se encontró ese código en el maestro.', 'error');
+      if (final) input.classList.add('invalid');
+    } else {
+      setLookupStatus('');
+    }
+  }
+
+  function loadDatalists() {
+    // No se crean miles de <option> al iniciar. Las sugerencias se dibujan sólo cuando el usuario escribe.
+    const codes = $('#employeeCodes');
+    if (codes) codes.replaceChildren();
+
+    const wf = $('#workforceEmails');
+    if (wf) {
+      const fromCatalog = window.ASYS_CATALOGOS?.WORKFORCE_CORREOS || [];
+      const fromMaster = employees.map((emp) => emp.ANALISTA_WF_CORREO);
+      const emails = [...new Set([...fromCatalog, ...fromMaster]
+        .map((v) => String(v || '').trim().toLowerCase())
+        .filter((v) => EMAIL_RE.test(v)))].sort();
+      wf.replaceChildren(...emails.map((email) => {
+        const opt = document.createElement('option');
+        opt.value = email;
+        return opt;
+      }));
+      const hint = wf.parentElement?.querySelector('.hint');
+      if (hint) {
+        hint.textContent = emails.length
+          ? `Hay ${emails.length} ${emails.length === 1 ? 'opción disponible' : 'opciones disponibles'}; también puedes escribir otro correo.`
+          : 'Todavía no hay un catálogo oficial cargado; escribe el correo de Workforce.';
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Correlación (Líder y Workforce llegan desde el enlace del correo)
+  // ------------------------------------------------------------------
+  function getURLParams() {
+    const p = new URLSearchParams(window.location.search);
+    return {
+      id_proceso_baja: p.get('id_proceso_baja') || p.get('ID_PROCESO_BAJA') || p.get('id') || null,
+      codigo_empleado: p.get('codigo_empleado') || p.get('CODIGO_EMPLEADO') || p.get('codigo') || null,
+      token: p.get('token') || p.get('TOKEN') || null
+    };
+  }
+
+  function validateCorrelation() {
+    if (currentFormType === 'REGISTRO_DDHH') return { valid: true };
+    const params = getURLParams();
+    if (!params.id_proceso_baja || !params.token) {
+      return { valid: false, message: 'Abre este formulario desde el enlace que llegó por correo; el enlace trae el número de caso.' };
+    }
+    return { valid: true, id_proceso_baja: params.id_proceso_baja, token: params.token };
+  }
+
+  function prefillFromURL() {
+    if (currentFormType === 'REGISTRO_DDHH') return;
+    const params = getURLParams();
+    if (params.codigo_empleado) {
+      const input = $('[data-employee-code]');
+      if (input) {
+        input.value = params.codigo_empleado;
+        handleLookupInput(true);
+      }
+    }
+    if (params.id_proceso_baja) {
+      showBanner('Caso ' + params.id_proceso_baja, 'Tu respuesta quedará vinculada a este caso.', 'info');
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Validación
+  // ------------------------------------------------------------------
+  function collectData(form) {
+    const data = {};
+    new FormData(form).forEach((value, key) => {
+      const v = typeof value === 'string' ? value.trim() : value;
+      data[key] = /^\d{4}-\d{2}-\d{2}T/.test(v) ? v.slice(0, 10) : v;
+    });
+    return data;
+  }
+
+  function labelOf(field) {
+    return (field.labels?.[0]?.textContent || field.name || '').replace('*', '').trim();
+  }
+
   function validateBusinessRules(form, data) {
     const errors = [];
-
-    // DDHH: Validar fechas
     if (currentFormType === 'REGISTRO_DDHH') {
-      const fechaIngreso = data.FECHA_INGRESO;
-      const fechaSalida = data.FECHA_SALIDA;
-
-      if (fechaIngreso && fechaSalida) {
-        const ingreso = new Date(fechaIngreso);
-        const salida = new Date(fechaSalida);
-
-        if (salida < ingreso) {
-          errors.push('La fecha de salida no puede ser anterior a la fecha de ingreso.');
-        }
-
-        // Validar que la fecha de ingreso no sea futura
-        const hoy = new Date();
-        hoy.setHours(0, 0, 0, 0);
-        if (ingreso > hoy) {
-          errors.push('La fecha de ingreso no puede ser futura.');
-        }
+      const today = new Date().toISOString().slice(0, 10);
+      if (data.FECHA_INGRESO && data.FECHA_SALIDA && data.FECHA_SALIDA < data.FECHA_INGRESO) {
+        errors.push('La fecha de salida no puede ser anterior a la fecha de ingreso.');
+      }
+      if (data.FECHA_INGRESO && data.FECHA_INGRESO > today) {
+        errors.push('La fecha de ingreso no puede ser futura.');
       }
     }
-
-    // Validar montos no negativos
-    const amountFields = form.querySelectorAll('input[type="number"]');
-    amountFields.forEach(field => {
-      const value = parseFloat(field.value || 0);
-      if (value < 0) {
-        const label = field.labels?.[0]?.textContent || field.name;
-        errors.push(`El campo "${label}" no puede ser negativo.`);
+    $$('input[type="number"]', form).forEach((field) => {
+      if (field.value !== '' && Number(field.value) < 0) errors.push(`"${labelOf(field)}" no puede ser negativo.`);
+    });
+    $$('input[type="email"]', form).forEach((field) => {
+      const v = field.value.trim();
+      if (v && !EMAIL_RE.test(v)) errors.push(`"${labelOf(field)}" no tiene un formato de correo válido.`);
+      if (v && window.ASYS_PRODUCTION_MODE === true && v.includes('example.invalid')) {
+        errors.push(`"${labelOf(field)}" no puede ser un correo de ejemplo.`);
       }
     });
-
-    // Validar formato de correos (adicional a HTML5)
-    const emailFields = form.querySelectorAll('input[type="email"]');
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    emailFields.forEach(field => {
-      if (field.value && !emailRegex.test(field.value)) {
-        const label = field.labels?.[0]?.textContent || field.name;
-        errors.push(`El correo "${label}" no tiene un formato válido.`);
-      }
-
-      // Validar que no sean correos de ejemplo (solo en modo producción)
-      if (window.ASYS_PRODUCTION_MODE === true && field.value && field.value.includes('example.invalid')) {
-        const label = field.labels?.[0]?.textContent || field.name;
-        errors.push(`El correo "${label}" no puede ser un correo de ejemplo (example.invalid).`);
-      }
-    });
-
     return errors;
   }
 
   function validateForm(form) {
-    let isValid = true;
+    $$('.invalid', form).forEach((el) => el.classList.remove('invalid'));
+    const missing = [];
 
-    // Remover marcas de error previas
-    form.querySelectorAll('.invalid, .error').forEach(el => {
-      el.classList.remove('invalid', 'error');
-    });
-
-    // Validar campos requeridos
-    form.querySelectorAll('[required]').forEach(field => {
-      if (field.offsetParent === null) return; // Campo oculto
-
-      const isEmpty = field.type === 'radio' || field.type === 'checkbox'
-        ? !form.querySelector(`[name="${CSS.escape(field.name)}"]:checked`)
-        : !String(field.value || '').trim();
-
-      if (isEmpty || !field.checkValidity()) {
-        field.classList.add('invalid', 'error');
-        isValid = false;
+    $$('[required]', form).forEach((field) => {
+      if (field.disabled) return;
+      if (!String(field.value || '').trim() || !field.checkValidity()) {
+        field.classList.add('invalid');
+        missing.push(labelOf(field));
       }
     });
 
-    // Validar empleado
-    const codeInput = document.querySelector('[data-employee-code]');
-    if (codeInput) {
-      const code = normalizeCode(codeInput.value);
-      const employee = findEmployee(code);
-      
-      if (!employee) {
-        codeInput.classList.add('invalid', 'error');
-        isValid = false;
+    const codeInput = $('[data-employee-code]', form);
+    if (codeInput && (!currentEmployee || normalizeCode(codeInput.value) !== normalizeCode(currentEmployee.CODIGO_EMPLEADO))) {
+      const resolved = findEmployee(codeInput.value);
+      if (resolved) {
+        selectEmployee(resolved);
+      } else {
+        codeInput.classList.add('invalid');
+        if (!missing.includes(labelOf(codeInput))) missing.unshift(labelOf(codeInput));
       }
     }
 
-    if (!isValid) {
-      const firstInvalid = form.querySelector('.invalid');
-      if (firstInvalid) {
-        firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-      showToast('Revisa los campos obligatorios. Hay información inválida o el código no corresponde a un colaborador activo.', 'error');
+    if (missing.length) {
+      $('.invalid', form)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showToast(`Completa: ${missing.slice(0, 4).join(', ')}${missing.length > 4 ? '…' : ''}`, 'error');
       return false;
     }
 
-    // Validaciones de negocio
-    const formData = new FormData(form);
-    const data = {};
-    formData.forEach((value, key) => {
-      data[key] = value;
-    });
-
-    const businessErrors = validateBusinessRules(form, data);
-    if (businessErrors.length > 0) {
-      const errorList = businessErrors.map(e => `• ${e}`).join('\n');
-      showToast(`Errores de validación:\n${errorList}`, 'error');
+    const errors = validateBusinessRules(form, collectData(form));
+    if (errors.length) {
+      showToast(errors.join('\n'), 'error');
       return false;
     }
-
     return true;
   }
 
-  // ============================================
-  // CORRELACIÓN POR URL (LÍDER Y WORKFORCE)
-  // ============================================
-  
-  /**
-   * Extrae parámetros de la URL para correlación
-   * Líder y Workforce reciben enlaces prellenados con:
-   * - id_proceso_baja: ID del caso a responder
-   * - codigo_empleado: Código del colaborador (validación)
-   * - token: Token de seguridad (generado por Power Automate)
-   */
-  function getURLParams() {
-    const params = new URLSearchParams(window.location.search);
-    return {
-      id_proceso_baja: params.get('id_proceso_baja') || params.get('ID_PROCESO_BAJA') || null,
-      codigo_empleado: params.get('codigo_empleado') || params.get('CODIGO_EMPLEADO') || null,
-      token: params.get('token') || params.get('TOKEN') || null
-    };
-  }
-
-  /**
-   * Prellenar formulario con datos de URL
-   * Solo para Líder y Workforce
-   */
-  function prefillFromURL() {
-    if (currentFormType === 'REGISTRO_DDHH') {
-      return; // DDHH no usa prellenado por URL
-    }
-
-    const urlParams = getURLParams();
-
-    // Si hay código de empleado en URL, prellenarlo
-    if (urlParams.codigo_empleado) {
-      const codeInput = document.querySelector('[data-employee-code]');
-      if (codeInput) {
-        codeInput.value = urlParams.codigo_empleado;
-        codeInput.dispatchEvent(new Event('input', { bubbles: true }));
-        
-        // Buscar y mostrar empleado
-        const employee = findEmployee(urlParams.codigo_empleado);
-        if (employee) {
-          populateEmployeeData(employee);
-        }
-      }
-    }
-
-    // Mostrar información de correlación si está presente
-    if (urlParams.id_proceso_baja) {
-      const infoDiv = document.createElement('div');
-      infoDiv.style.cssText = 'background:#e3f2fd;border-left:4px solid #2196f3;padding:12px;margin:16px 0;font-family:system-ui;font-size:14px;';
-      infoDiv.innerHTML = `
-        <strong>📋 Caso:</strong> ${urlParams.id_proceso_baja}<br>
-        <small style="color:#666;">Tu respuesta será vinculada a este caso.</small>
-      `;
-      
-      const form = document.querySelector('form[data-asys-form]');
-      if (form) {
-        form.insertBefore(infoDiv, form.firstChild);
-      }
-    }
-  }
-
-  /**
-   * Validar que los formularios de respuesta tengan los datos de correlación
-   */
-  function validateCorrelation() {
-    if (currentFormType === 'REGISTRO_DDHH') {
-      return { valid: true }; // DDHH no requiere correlación
-    }
-
-    const urlParams = getURLParams();
-
-    if (!urlParams.id_proceso_baja) {
-      return {
-        valid: false,
-        message: 'Este formulario requiere un ID de caso. Debes acceder desde el enlace enviado por correo.'
-      };
-    }
-
-    if (!urlParams.token) {
-      return {
-        valid: false,
-        message: 'Token de seguridad no encontrado. Debes acceder desde el enlace enviado por correo.'
-      };
-    }
-
-    return { 
-      valid: true, 
-      id_proceso_baja: urlParams.id_proceso_baja,
-      token: urlParams.token 
-    };
-  }
-
-  // ============================================
-  // ENVÍO DE DATOS
-  // ============================================
-  
-  async function sendToWebhook(data, webhookURL) {
-    const response = await fetch(webhookURL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(data)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorObj;
-      
-      try {
-        errorObj = JSON.parse(errorText);
-      } catch {
-        errorObj = { message: errorText };
-      }
-
-      const detail = String(errorObj.message || errorObj.error?.message || '').trim();
-      const message = detail && detail.length < 180 ? `: ${detail}` : '';
-      
-      throw new Error(`HTTP ${response.status} al enviar al flujo${message}. Revisa la ejecución en Power Automate.`);
-    }
-
-    return await response.json();
-  }
-
-  async function handleFormSubmit(event) {
-    event.preventDefault();
-
-    const form = event.target;
-
-    // Validar correlación (solo Líder y Workforce)
-    const correlationValidation = validateCorrelation();
-    if (!correlationValidation.valid) {
-      showToast(correlationValidation.message, 'error');
-      return;
-    }
-
-    // Validar formulario
-    if (!validateForm(form)) {
-      return;
-    }
-
-    // Preparar datos del formulario
-    const formData = new FormData(form);
-    const data = {};
-
-    formData.forEach((value, key) => {
-      // Formatear fechas ISO a yyyy-MM-dd
-      if (value && value.includes('T') && value.match(/^\d{4}-\d{2}-\d{2}T/)) {
-        data[key] = value.split('T')[0];
-      } else {
-        data[key] = value;
-      }
-    });
-
-    // Generar IDs según el tipo de formulario
-    const config = FORM_TYPES[currentFormType];
-    const uniqueId = generateUniqueId(config.casePrefix);
-
-    // Metadatos comunes
-    data.CLAVE_IDEMPOTENCIA = generateShortGuid() + '-' + Date.now();
+  // ------------------------------------------------------------------
+  // Envío
+  // ------------------------------------------------------------------
+  function buildPayload(form, correlation) {
+    const cfg = FORM_TYPES[currentFormType];
+    const data = collectData(form);
+    data.CODIGO_EMPLEADO = currentEmployee.CODIGO_EMPLEADO;
+    data.CLAVE_IDEMPOTENCIA = `${shortGuid()}-${Date.now()}`;
     data.FECHA_CREACION = new Date().toISOString();
 
-    // Metadatos específicos por tipo
     if (currentFormType === 'REGISTRO_DDHH') {
-      // DDHH crea el caso
-      data.ID_PROCESO_BAJA = uniqueId;
-      data.RESPONSE_ID_DDHH = uniqueId;
-      data.ESTADO_PROCESO = 'FASE_1_ESPERANDO_RESPUESTAS';
-      data.TIPO_REGISTRO = 'DDHH';
-      data.LIDER_RECIBIDO = false;
-      data.RECIBIDO_DE_LA_FUERZA_LABORAL = false;
-      data.CONSOLIDADO = false;
-      data.ESTADO_PAGO = 'PENDIENTE';
-      data.ESTADO_APROBACION_COMPE = 'PENDIENTE';
-      data.ESTADO_APROBACION_BUSINESS = 'PENDIENTE';
-      data.INTENTOS_FASE_2 = 0;
-      data.INTENTOS_FASE_3 = 0;
-      data.INTENTOS_FASE_6 = 0;
-
-      // Intentar obtener usuario de SharePoint
-      let spContext = null;
+      const id = uniqueId(cfg.casePrefix);
+      Object.assign(data, {
+        ID_PROCESO_BAJA: id,
+        RESPONSE_ID_DDHH: id,
+        ESTADO_PROCESO: 'FASE_1_ESPERANDO_RESPUESTAS',
+        TIPO_REGISTRO: 'DDHH',
+        LIDER_RECIBIDO: false,
+        WORKFORCE_RECIBIDO: false,
+        // Nombre que ya recibía el flujo DDHH en producción; se conserva por compatibilidad.
+        RECIBIDO_DE_LA_FUERZA_LABORAL: false,
+        CONSOLIDADO: false,
+        ESTADO_PAGO: 'PENDIENTE',
+        ESTADO_APROBACION_COMPE: 'PENDIENTE',
+        ESTADO_APROBACION_BUSINESS: 'PENDIENTE',
+        INTENTOS_FASE_2: 0,
+        INTENTOS_FASE_3: 0,
+        INTENTOS_FASE_6: 0
+      });
+      let sp = null;
       try {
-        if (typeof _spPageContextInfo !== 'undefined') {
-          spContext = _spPageContextInfo;
-        } else if (window.parent && window.parent !== window && typeof window.parent._spPageContextInfo !== 'undefined') {
-          spContext = window.parent._spPageContextInfo;
-        }
-      } catch (e) {
-        spContext = null;
-      }
-
-      data.CREADO_POR = spContext?.userEmail || '';
-
+        sp = typeof _spPageContextInfo !== 'undefined' ? _spPageContextInfo : window.parent?._spPageContextInfo || null;
+      } catch { sp = null; }
+      data.CREADO_POR = sp?.userEmail || '';
     } else {
-      // Líder y Workforce responden a caso existente
-      // Obtener ID_PROCESO_BAJA de URL (obligatorio)
-      data.ID_PROCESO_BAJA = correlationValidation.id_proceso_baja;
-      data.TOKEN_SEGURIDAD = correlationValidation.token;
-      data[config.responsePrefix] = uniqueId;
+      data.ID_PROCESO_BAJA = correlation.id_proceso_baja;
+      data.TOKEN_SEGURIDAD = correlation.token;
+      data[cfg.responseKey] = uniqueId(cfg.casePrefix);
       data.TIPO_REGISTRO = currentFormType === 'SOLVENCIA_LIDER' ? 'LIDER' : 'WORKFORCE';
+    }
+    return data;
+  }
 
-      // Validar que el código de empleado coincida con el esperado
-      const urlParams = getURLParams();
-      if (urlParams.codigo_empleado && normalizeCode(data.CODIGO_EMPLEADO) !== normalizeCode(urlParams.codigo_empleado)) {
-        showToast('El código de empleado no coincide con el esperado para este caso.', 'error');
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (submitting) return;
+    const form = event.currentTarget;
+
+    const url = webhookURL(currentFormType);
+    if (!url) {
+      showToast('Este formulario todavía no está conectado al flujo. Avísale al administrador.', 'error');
+      return;
+    }
+    const correlation = validateCorrelation();
+    if (!correlation.valid) { showToast(correlation.message, 'error'); return; }
+    if (!validateForm(form)) return;
+
+    if (currentFormType !== 'REGISTRO_DDHH') {
+      const expected = getURLParams().codigo_empleado;
+      if (expected && normalizeCode(expected) !== normalizeCode(currentEmployee.CODIGO_EMPLEADO)) {
+        showToast('El código no corresponde al colaborador de este caso.', 'error');
         return;
       }
     }
 
-    // Deshabilitar botón de envío
-    const submitBtn = form.querySelector('[type="submit"]');
-    const originalText = submitBtn.innerHTML;
-    submitBtn.disabled = true;
-    submitBtn.innerHTML = '<span class="spinner"></span>Guardando...';
+    const payload = buildPayload(form, correlation);
+    const button = $('[type="submit"]', form);
+    const original = button.innerHTML;
+    submitting = true;
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner" aria-hidden="true"></span>Guardando…';
 
     try {
-      // Obtener webhook URL
-      const webhookURL = getWebhookURL(currentFormType);
-
-      // Enviar al webhook
-      const result = await sendToWebhook(data, webhookURL);
-
-      console.log('✓ Enviado al webhook:', result);
-
-      showToast(`Registro guardado exitosamente. ID: ${result.itemId || result.id || 'OK'}`, 'success');
-
-      // Limpiar formulario
-      form.reset();
-      currentEmployee = null;
-
-      // Volver al landing después de 2 segundos
-      setTimeout(() => showScreen('landing'), 2000);
-
+      const result = await sendToWebhook(payload, url);
+      const id = result.idProcesoBaja || result.ID_PROCESO_BAJA || result.itemId || result.id || payload.ID_PROCESO_BAJA;
+      const idEl = $('[data-result-id]');
+      if (idEl) idEl.textContent = id;
+      resetForm(form);
+      $('[data-toast]')?.classList.remove('show');
+      showScreen('result');
     } catch (error) {
-      console.error('Error al guardar:', error);
-      
-      // Mensajes de error específicos
-      let errorMessage = error.message;
-      
-      if (error.message.includes('409')) {
-        errorMessage = 'Ya existe una respuesta para este caso. No se permiten respuestas duplicadas.';
-      } else if (error.message.includes('404')) {
-        errorMessage = 'El caso no existe o ya fue cerrado.';
-      } else if (error.message.includes('403') || error.message.includes('401')) {
-        errorMessage = 'No tienes permisos para responder a este caso o el token es inválido.';
-      } else if (error.message.includes('400')) {
-        errorMessage = 'Los datos enviados son inválidos. Verifica todos los campos.';
-      }
-      
-      showToast('Error al guardar: ' + errorMessage, 'error');
-
+      console.error('[ASYS] Error al guardar', error.status, error.message);
+      showToast(friendlyError(error), 'error');
     } finally {
-      submitBtn.disabled = false;
-      submitBtn.innerHTML = originalText;
+      submitting = false;
+      button.disabled = !webhookURL(currentFormType);
+      button.innerHTML = original;
     }
   }
 
-  // ============================================
-  // EVENTOS
-  // ============================================
-  
-  function setupEventListeners() {
-    // Navegación
-    document.querySelectorAll('[data-action="start"]').forEach(btn => {
-      btn.addEventListener('click', () => showScreen('form'));
-    });
+  // form.reset() dispara el evento "reset", que llama a clearState().
+  function resetForm(form) {
+    form.reset();
+  }
 
-    document.querySelectorAll('[data-action="home"]').forEach(btn => {
-      btn.addEventListener('click', () => showScreen('landing'));
-    });
+  function clearState(form) {
+    lastLookupKey = null;
+    populateEmployeeData(null);
+    clearMatches();
+    setLookupStatus('');
+    $$('.invalid', form).forEach((el) => el.classList.remove('invalid'));
+  }
 
-    // Lookup de empleado
-    const codeInput = document.querySelector('[data-employee-code]');
-    if (codeInput) {
-      codeInput.addEventListener('input', () => {
-        const code = normalizeCode(codeInput.value);
-        if (code.length >= 3) {
-          const employee = findEmployee(code);
-          if (employee) {
-            populateEmployeeData(employee);
-          }
-        }
+  // ------------------------------------------------------------------
+  // Inicio
+  // ------------------------------------------------------------------
+  function updateSectionStates() {
+    $$('.form-card').forEach((card) => {
+      const required = $$('[required]', card).filter((field) => !field.disabled);
+      const complete = required.length > 0 && required.every((field) => {
+        if (field.matches('[data-employee-code]')) return Boolean(currentEmployee);
+        return String(field.value || '').trim() && field.checkValidity();
       });
+      card.classList.toggle('is-complete', complete);
+    });
+  }
 
-      codeInput.addEventListener('blur', () => {
-        const code = normalizeCode(codeInput.value);
-        const employee = findEmployee(code);
-        codeInput.classList.toggle('invalid', Boolean(code) && !employee);
+  function updateProgress() {
+    const form = $('form[data-asys-form]');
+    const bar = $('[data-progress]');
+    if (!form || !bar) return;
+    const required = $$('[required]', form).filter((field) => !field.disabled && field.offsetParent !== null);
+    const complete = required.filter((field) => String(field.value || '').trim() && field.checkValidity()).length;
+    const progress = required.length ? Math.round((complete / required.length) * 100) : 0;
+    bar.style.width = `${progress}%`;
+    bar.setAttribute('aria-valuenow', String(progress));
+    const label = $('[data-progress-label]');
+    if (label) label.textContent = `${progress}% completado`;
+    updateSectionStates();
+  }
+
+  function bindEvents() {
+    const form = $('form[data-asys-form]');
+    const input = $('[data-employee-code]');
+
+    $$('[data-action="start"]').forEach((btn) => btn.addEventListener('click', () => {
+      showScreen('form');
+      $('[data-employee-code]')?.focus();
+    }));
+    $$('[data-action="home"]').forEach((btn) => btn.addEventListener('click', () => showScreen('landing')));
+
+    if (input) {
+      let lookupTimer = null;
+      input.addEventListener('input', () => {
+        clearTimeout(lookupTimer);
+        lookupTimer = setTimeout(() => handleLookupInput(false), 70);
+      });
+      input.addEventListener('change', () => {
+        clearTimeout(lookupTimer);
+        handleLookupInput(true);
       });
     }
-
-    // Progress bar
-    const form = document.querySelector('form[data-asys-form]');
     if (form) {
-      form.addEventListener('submit', handleFormSubmit);
-
+      form.addEventListener('submit', handleSubmit);
       form.addEventListener('input', updateProgress);
       form.addEventListener('change', updateProgress);
+      // Se espera un ciclo para que el navegador termine de restaurar los valores por defecto.
+      form.addEventListener('reset', () => setTimeout(() => { clearState(form); updateProgress(); }, 0));
+    }
+    $$('[data-action="new"]').forEach((btn) => btn.addEventListener('click', () => {
+      showScreen('form');
+      $('[data-employee-code]')?.focus();
+    }));
+  }
+
+  function start() {
+    loadDatalists();
+    bindEvents();
+    prefillFromURL();
+    $$('[data-employee-field]').forEach((field) => {
+      if (!field.labels?.length && !field.hasAttribute('aria-label')) {
+        field.setAttribute('aria-label', field.getAttribute('data-employee-field').replaceAll('_', ' ').toLowerCase());
+      }
+    });
+    const progressBar = $('[data-progress]');
+    if (progressBar) {
+      progressBar.setAttribute('role', 'progressbar');
+      progressBar.setAttribute('aria-label', 'Progreso del formulario');
+      progressBar.setAttribute('aria-valuemin', '0');
+      progressBar.setAttribute('aria-valuemax', '100');
+    }
+    updateProgress();
+
+    if (!employees.length) {
+      showBanner('Maestro no cargado', 'No se encontró la lista de colaboradores (assets/colaboradores.js).');
+    }
+    if (!webhookURL(currentFormType)) {
+      showBanner('Formulario sin conexión', 'Puedes revisar los datos, pero no se podrá guardar hasta configurar el flujo.');
+      const button = $('form[data-asys-form] [type="submit"]');
+      if (button) button.disabled = true;
+    } else if (currentFormType !== 'REGISTRO_DDHH' && !validateCorrelation().valid) {
+      showBanner('Falta el enlace del caso', 'Abre este formulario desde el correo que recibiste; así queda vinculado al caso correcto.');
     }
   }
 
-  // ============================================
-  // INICIALIZACIÓN
-  // ============================================
-  
   function init(options = {}) {
     currentFormType = options.type || 'REGISTRO_DDHH';
-
-    // Validar tipo de formulario
     if (!FORM_TYPES[currentFormType]) {
-      console.error(`⚠️ Tipo de formulario inválido: ${currentFormType}`);
+      console.error('[ASYS] Tipo de formulario inválido:', currentFormType);
       return;
     }
-
-    // Validar configuración de webhook
-    const validation = validateWebhookConfig(currentFormType);
-    if (!validation.valid) {
-      console.error('⚠️ Configuración de webhook incompleta:', validation.message);
-
-      // Mostrar advertencia al usuario
-      const warning = document.createElement('div');
-      warning.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f44336;color:white;padding:16px;text-align:center;z-index:10000;font-family:system-ui,-apple-system,sans-serif;';
-      warning.innerHTML = `<strong>⚠️ Configuración pendiente</strong><br>${validation.message}`;
-      document.body.insertBefore(warning, document.body.firstChild);
-
-      // Bloquear botón de envío
-      const submitBtn = document.querySelector('[type="submit"]');
-      if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.title = 'No se puede enviar: webhook no configurado';
-      }
-
-      return;
-    }
-
-    // Cargar datos y configurar eventos
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => {
-        loadEmployeeCodes();
-        prefillFromURL();
-        setupEventListeners();
-        updateProgress();
-      });
-    } else {
-      loadEmployeeCodes();
-      prefillFromURL();
-      setupEventListeners();
-      updateProgress();
-    }
-
-    console.log('✓ ASYS Forms Unified v4.0 inicializado');
-    console.log('  Tipo:', currentFormType);
-    console.log('  Webhook:', '✓ Configurado');
-    console.log('  Empleados:', employees.length);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
   }
 
-  // ============================================
-  // API PÚBLICA
-  // ============================================
-  
   window.ASYSForms = {
     init,
     showScreen,
     showToast,
     findEmployee,
+    findCandidates,
+    findSuggestions,
     populateEmployeeData,
     formatDate,
     formatMoney,
-    version: '4.2.0'
+    version: VERSION
   };
-
 })();

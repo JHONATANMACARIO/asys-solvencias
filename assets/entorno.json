@@ -11,7 +11,7 @@
     "maestroColaboradores": {
       "source": "colaboradores.js",
       "periodo": "2026-08",
-      "totalRegistros": 784
+      "totalRegistros": 3967
     },
     "webhooks": {
       "configFile": "webhook-config.js",
