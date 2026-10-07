@@ -1,158 +1,90 @@
 /**
- * ENTORNO LOADER v1.0
- * ===================
- * Carga configuración centralizada desde .kiro-config/entorno.json
- * 
- * USO:
- * 1. Incluir ANTES de asys-forms-unified.js:
- *    <script src="assets/entorno-loader.js"></script>
- * 
- * 2. Esperar a que se cargue:
- *    window.ASYS_ENTORNO_CONFIG contiene la configuración
- * 
- * 3. Las variables se exponen automáticamente:
- *    - window.ASYS_PRODUCTION_MODE (boolean)
- *    - window.ASYS_ANTI_DEMO_ENABLED (boolean)
- *    - window.ASYS_WEBHOOK_CONFIG (object - si existe webhook-config.js)
+ * ASYS · Cargador de entorno v1.1.0
+ *
+ * En GitHub/Apache carga assets/entorno.json.
+ * Al abrir el HTML directamente (file://), usa DEVELOPMENT sin intentar XHR,
+ * porque Chrome bloquea archivos locales por CORS. Ese modo local no altera
+ * la configuración de webhooks, que se carga en webhook-config.js.
  */
-
-(function() {
+(function () {
   'use strict';
 
-  // Se resuelve desde los HTML publicados en la raíz de GitHub Pages.
-  // Solo contiene configuración pública; nunca deben incluirse secretos.
   const ENTORNO_PATH = 'assets/entorno.json';
-  
-  // Estado de carga
+  const LOCAL_DEFAULTS = Object.freeze({
+    version: 'local-defaults',
+    environment: 'DEVELOPMENT',
+    frontend: {
+      productionMode: false,
+      antiDEMO: { enabled: false },
+      webhooks: { requireExternalConfig: true }
+    }
+  });
+
   window.ASYS_ENTORNO_CONFIG = null;
   window.ASYS_ENTORNO_LOADED = false;
   window.ASYS_ENTORNO_ERROR = null;
 
-  /**
-   * Carga síncrona de entorno.json
-   * NOTA: XMLHttpRequest síncrono está deprecado pero es necesario
-   * para garantizar que la config esté disponible antes de init()
-   */
+  function applyConfig(config) {
+    window.ASYS_ENTORNO_CONFIG = config;
+    window.ASYS_ENTORNO_LOADED = true;
+    window.ASYS_ENTORNO_ERROR = null;
+    window.ASYS_PRODUCTION_MODE = config?.frontend?.productionMode === true;
+    window.ASYS_ANTI_DEMO_ENABLED = config?.frontend?.antiDEMO?.enabled === true;
+    return config;
+  }
+
+  function useLocalDefaults() {
+    const config = applyConfig(LOCAL_DEFAULTS);
+    console.info('[ENTORNO] Archivo local: modo DEVELOPMENT aplicado sin solicitud de red.');
+    return config;
+  }
+
   function loadEntornoSync() {
+    if (window.location.protocol === 'file:') return useLocalDefaults();
+
     try {
       const xhr = new XMLHttpRequest();
-      xhr.open('GET', ENTORNO_PATH, false); // false = síncrono
+      xhr.open('GET', ENTORNO_PATH, false);
       xhr.send(null);
-      
-      if (xhr.status === 200) {
-        const config = JSON.parse(xhr.responseText);
-        window.ASYS_ENTORNO_CONFIG = config;
-        window.ASYS_ENTORNO_LOADED = true;
-        
-        // Exponer variables críticas
-        window.ASYS_PRODUCTION_MODE = config.frontend?.productionMode || false;
-        window.ASYS_ANTI_DEMO_ENABLED = config.frontend?.antiDEMO?.enabled || false;
-        
-        console.log('[ENTORNO] Configuración cargada:', {
-          version: config.version,
-          environment: config.environment,
-          productionMode: window.ASYS_PRODUCTION_MODE,
-          antiDEMO: window.ASYS_ANTI_DEMO_ENABLED
-        });
-        
-        return config;
-      } else {
-        throw new Error(`HTTP ${xhr.status}: ${xhr.statusText}`);
-      }
+      if (xhr.status !== 200) throw new Error(`HTTP ${xhr.status}`);
+      const config = applyConfig(JSON.parse(xhr.responseText));
+      console.info(`[ENTORNO] ${config.environment || 'DEVELOPMENT'} · configuración cargada.`);
+      return config;
     } catch (error) {
-      window.ASYS_ENTORNO_ERROR = error.message;
-      console.error('[ENTORNO] Error cargando configuración:', error);
-      
-      // Fallback seguro
+      window.ASYS_ENTORNO_ERROR = String(error?.message || error);
       window.ASYS_PRODUCTION_MODE = false;
       window.ASYS_ANTI_DEMO_ENABLED = false;
-      
-      console.warn('[ENTORNO] Usando valores por defecto (DEVELOPMENT)');
+      console.warn('[ENTORNO] No se pudo cargar entorno.json; se usa DEVELOPMENT.');
       return null;
     }
   }
 
-  /**
-   * Carga asíncrona de entorno.json (alternativa moderna)
-   * Para usarse con async/await en scripts futuros
-   */
-  window.loadEntornoAsync = async function() {
+  window.loadEntornoAsync = async function () {
+    if (window.location.protocol === 'file:') return useLocalDefaults();
     try {
-      const response = await fetch(ENTORNO_PATH);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const config = await response.json();
-      window.ASYS_ENTORNO_CONFIG = config;
-      window.ASYS_ENTORNO_LOADED = true;
-      
-      window.ASYS_PRODUCTION_MODE = config.frontend?.productionMode || false;
-      window.ASYS_ANTI_DEMO_ENABLED = config.frontend?.antiDEMO?.enabled || false;
-      
-      console.log('[ENTORNO] Configuración cargada (async):', {
-        version: config.version,
-        environment: config.environment
-      });
-      
-      return config;
+      const response = await fetch(ENTORNO_PATH, { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return applyConfig(await response.json());
     } catch (error) {
-      window.ASYS_ENTORNO_ERROR = error.message;
-      console.error('[ENTORNO] Error cargando configuración (async):', error);
+      window.ASYS_ENTORNO_ERROR = String(error?.message || error);
+      console.warn('[ENTORNO] No se pudo cargar entorno.json de forma asíncrona.');
       return null;
     }
   };
 
-  /**
-   * Helper: Obtener valor de configuración con path notation
-   * Ejemplo: getConfig('powerAutomate.variables.MAX_OPEN_CASES_PER_EMPLOYEE')
-   */
-  window.getEntornoConfig = function(path, defaultValue = null) {
-    if (!window.ASYS_ENTORNO_CONFIG) {
-      console.warn('[ENTORNO] Configuración no cargada, retornando default');
-      return defaultValue;
-    }
-    
-    const parts = path.split('.');
+  window.getEntornoConfig = function (configPath, defaultValue = null) {
     let value = window.ASYS_ENTORNO_CONFIG;
-    
-    for (const part of parts) {
-      if (value && typeof value === 'object' && part in value) {
-        value = value[part];
-      } else {
-        return defaultValue;
-      }
+    for (const part of String(configPath).split('.')) {
+      if (!value || typeof value !== 'object' || !(part in value)) return defaultValue;
+      value = value[part];
     }
-    
     return value;
   };
 
-  /**
-   * Helper: Verificar si estamos en modo producción
-   */
-  window.isProduction = function() {
-    return window.ASYS_PRODUCTION_MODE === true;
-  };
+  window.isProduction = () => window.ASYS_PRODUCTION_MODE === true;
+  window.isAntiDEMOEnabled = () => window.ASYS_ANTI_DEMO_ENABLED === true;
 
-  /**
-   * Helper: Verificar si anti-DEMO está habilitado
-   */
-  window.isAntiDEMOEnabled = function() {
-    return window.ASYS_ANTI_DEMO_ENABLED === true;
-  };
-
-  // Cargar configuración inmediatamente al cargar el script
   loadEntornoSync();
-
-  // Si webhook-config.js existe, validar contra entorno.json
-  if (typeof window.ASYS_WEBHOOK_CONFIG !== 'undefined') {
-    const requireExternal = getEntornoConfig('frontend.webhooks.requireExternalConfig', false);
-    if (!requireExternal) {
-      console.warn('[ENTORNO] webhook-config.js cargado pero requireExternalConfig=false');
-    }
-  }
-
 })();
 
-// Exponer versión del loader
-window.ASYS_ENTORNO_LOADER_VERSION = '1.0.0';
+window.ASYS_ENTORNO_LOADER_VERSION = '1.1.0';

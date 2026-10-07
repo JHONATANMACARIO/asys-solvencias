@@ -502,7 +502,13 @@
       });
       let sp = null;
       try {
-        sp = typeof _spPageContextInfo !== 'undefined' ? _spPageContextInfo : window.parent?._spPageContextInfo || null;
+        if (typeof _spPageContextInfo !== 'undefined') {
+          sp = _spPageContextInfo;
+        } else if (window.location.protocol !== 'file:' && window.parent !== window) {
+          // Sólo consultar la ventana padre cuando comparte origen. En file:// Chrome
+          // reporta un error de seguridad aunque el acceso esté dentro de try/catch.
+          if (window.parent.location.origin === window.location.origin) sp = window.parent._spPageContextInfo || null;
+        }
       } catch { sp = null; }
       data.CREADO_POR = sp?.userEmail || '';
     } else {
