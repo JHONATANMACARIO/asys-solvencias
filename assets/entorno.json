@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "environment": "PRODUCTION",
+  "frontend": {
+    "productionMode": true,
+    "antiDEMO": {
+      "enabled": true,
+      "blockDEMOCodes": true,
+      "blockExampleInvalid": true
+    },
+    "maestroColaboradores": {
+      "source": "colaboradores.js",
+      "periodo": "2026-08",
+      "totalRegistros": 784
+    },
+    "webhooks": {
+      "configFile": "webhook-config.js",
+      "requireExternalConfig": true
+    }
+  }
+}

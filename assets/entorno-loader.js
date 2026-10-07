@@ -19,8 +19,9 @@
 (function() {
   'use strict';
 
-  // Ruta relativa desde assets/ hacia .kiro-config/
-  const ENTORNO_PATH = '../../../00. INICIO Y DIAGRAMAS/.kiro-config/entorno.json';
+  // Se resuelve desde los HTML publicados en la raíz de GitHub Pages.
+  // Solo contiene configuración pública; nunca deben incluirse secretos.
+  const ENTORNO_PATH = 'assets/entorno.json';
   
   // Estado de carga
   window.ASYS_ENTORNO_CONFIG = null;

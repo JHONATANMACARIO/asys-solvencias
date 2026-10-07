@@ -1,57 +1,11 @@
-/**
- * ASYS — Configuración de Webhooks Power Automate
- * ================================================
- * 
- * ARCHIVO ACTIVO CON MARCADORES DE SEGURIDAD
- * 
- * Este archivo contiene marcadores en lugar de URLs reales para evitar
- * exponer las firmas de seguridad (sig=...) en el control de versiones.
- * 
- * Para configurar las URLs reales:
- * 1. Consulta webhook-config.example.js para instrucciones completas
- * 2. Obtén las URLs de los triggers HTTP en Power Automate
- * 3. Reemplaza los marcadores URL_WEBHOOK_* por las URLs reales
- * 4. NO versiones este archivo con URLs reales
- * 
- * IMPORTANTE: Si este archivo contenía URLs reales anteriormente,
- * esas URLs deben rotarse en Power Automate por seguridad.
- */
-
 window.ASYS_WEBHOOK_CONFIG = {
-  REGISTRO_DDHH:       "URL_WEBHOOK_REGISTRO_DDHH",
-  SOLVENCIA_LIDER:     "URL_WEBHOOK_SOLVENCIA_LIDER",
-  SOLVENCIA_WORKFORCE: "URL_WEBHOOK_SOLVENCIA_WORKFORCE",
+  REGISTRO_DDHH: "https://defaulteaa593ed6784456594d013056f1192.70.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/29/workflows/0f26fc7cfcd345b8a6b5e3a943eac420/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=es1Nh3PvynSVKykXp0FG9nV47UoayNxD8Y9sx605OmA",
+  SOLVENCIA_LIDER: "https://defaulteaa593ed6784456594d013056f1192.70.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/04/workflows/a53a66dad7584e449899102e705cda81/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=gvfzTVYNJ1tT33UoEhPS4fxXOioXbO50eSNEnESUAz8",
+  SOLVENCIA_WORKFORCE: "https://defaulteaa593ed6784456594d013056f1192.70.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/13/workflows/5d79623c0a144131ac32bb67d7135019/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=QnZaCDdGuqbsx9u1JTmgJZTwsRWq_VB0UdYoSeBqOTc",
   CONSOLIDACION_FASE1: "URL_WEBHOOK_CONSOLIDACION_FASE1"
 };
 
-/**
- * Validación de configuración
- */
 window.ASYS_WEBHOOK_CONFIG.isValid = function() {
-  const required = ['REGISTRO_DDHH', 'SOLVENCIA_LIDER', 'SOLVENCIA_WORKFORCE'];
-  for (const key of required) {
-    const url = this[key];
-    if (!url || url.startsWith('URL_WEBHOOK_') || url.startsWith('PENDIENTE_')) {
-      return false;
-    }
-  }
-  return true;
+  return ['REGISTRO_DDHH','SOLVENCIA_LIDER','SOLVENCIA_WORKFORCE'].every(k => /^https:\/\/.+sig=/.test(this[k]));
 };
-
-window.ASYS_WEBHOOK_CONFIG.getPendingMessages = function() {
-  const messages = [];
-  const checks = {
-    'REGISTRO_DDHH': 'Registro DDHH (F1.1)',
-    'SOLVENCIA_LIDER': 'Solvencia Líder (F1.2-L)',
-    'SOLVENCIA_WORKFORCE': 'Solvencia Workforce (F1.2-WF)'
-  };
-  
-  for (const [key, label] of Object.entries(checks)) {
-    const url = this[key];
-    if (!url || url.startsWith('URL_WEBHOOK_') || url.startsWith('PENDIENTE_')) {
-      messages.push(`- ${label}: no configurado`);
-    }
-  }
-  
-  return messages;
-};
+window.ASYS_WEBHOOK_CONFIG.getPendingMessages = function() { return this.isValid() ? [] : ['Configuración de webhooks incompleta']; };
