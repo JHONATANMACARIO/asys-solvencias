@@ -10,7 +10,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '4.3.0';
+  const VERSION = '4.3.1';
 
   const FORM_TYPES = {
     REGISTRO_DDHH: { webhookKey: 'REGISTRO_DDHH', casePrefix: 'BAJA', responseKey: 'RESPONSE_ID_DDHH', label: 'Registro DDHH' },
@@ -71,16 +71,28 @@
 
   /** Búsqueda parcial rápida por código, nombre, país o empresa. */
   function findSuggestions(value) {
-    const terms = normalizeSearch(value).split(' ').filter(Boolean);
-    if (!terms.length || normalizeSearch(value).length < 2) return [];
+    const query = normalizeSearch(value);
+    const terms = query.split(' ').filter(Boolean);
+    if (!terms.length || query.length < 2) return [];
     const matches = [];
     for (const entry of searchIndex) {
       if (isAllowed(entry.emp) && terms.every((term) => entry.text.includes(term))) matches.push(entry.emp);
     }
+    const relevance = (emp) => {
+      const code = normalizeSearch(emp.CODIGO_EMPLEADO);
+      const name = normalizeSearch(emp.NOMBRE_COMPLETO);
+      if (code === query) return 0;
+      if (code.startsWith(query)) return 1;
+      if (name.startsWith(query)) return 2;
+      if (name.split(' ').some((word) => word.startsWith(query))) return 3;
+      if (code.includes(query)) return 4;
+      return 5;
+    };
     return matches.sort((a, b) => {
+      const score = relevance(a) - relevance(b);
       const activeA = String(a.ESTADO_COLABORADOR).toUpperCase() === 'ACTIVO' ? 0 : 1;
       const activeB = String(b.ESTADO_COLABORADOR).toUpperCase() === 'ACTIVO' ? 0 : 1;
-      return activeA - activeB || String(a.NOMBRE_COMPLETO).localeCompare(String(b.NOMBRE_COMPLETO), 'es');
+      return score || activeA - activeB || String(a.NOMBRE_COMPLETO).localeCompare(String(b.NOMBRE_COMPLETO), 'es');
     });
   }
 
@@ -274,11 +286,17 @@
     matches.slice(0, 12).forEach((emp) => {
       const btn = document.createElement('button');
       btn.type = 'button';
+      const primary = document.createElement('span');
+      primary.className = 'lookup-primary';
+      const code = document.createElement('strong');
+      code.className = 'lookup-code';
+      code.textContent = emp.CODIGO_EMPLEADO;
       const name = document.createElement('span');
       name.textContent = emp.NOMBRE_COMPLETO;
+      primary.append(code, name);
       const meta = document.createElement('small');
       meta.textContent = [emp.PAIS_NOMBRE, emp.EMPRESA, emp.PUESTO].filter(Boolean).join(' · ');
-      btn.append(name, meta);
+      btn.append(primary, meta);
       btn.addEventListener('click', () => selectEmployee(emp));
       host.appendChild(btn);
     });
