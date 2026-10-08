@@ -10,7 +10,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '4.3.1';
+  const VERSION = '4.3.2';
 
   const FORM_TYPES = {
     REGISTRO_DDHH: { webhookKey: 'REGISTRO_DDHH', casePrefix: 'BAJA', responseKey: 'RESPONSE_ID_DDHH', label: 'Registro DDHH' },
@@ -248,13 +248,16 @@
   }
 
   function populateEmployeeData(emp) {
+    const sameEmployee = Boolean(emp && currentEmployee &&
+      normalizeCode(emp.CLAVE_BUSQUEDA || emp.CODIGO_EMPLEADO) ===
+      normalizeCode(currentEmployee.CLAVE_BUSQUEDA || currentEmployee.CODIGO_EMPLEADO));
     currentEmployee = emp || null;
     $$('[data-employee-field]').forEach((field) => {
       const key = field.getAttribute('data-employee-field');
       let value = emp ? (emp[key] ?? '') : '';
       if (field.type === 'date' && typeof value === 'string') value = value.slice(0, 10);
-      // Para correos editables, no borres lo que la persona ya escribió si el maestro viene vacío.
-      if (emp && !value && !field.readOnly && field.type === 'email') return;
+      // Al cambiar de colaborador nunca se reutilizan correos del anterior.
+      if (sameEmployee && !value && !field.readOnly && field.type === 'email') return;
       if (field.tagName === 'SELECT') ensureOption(field, value);
       field.value = value;
       field.classList.remove('invalid');
