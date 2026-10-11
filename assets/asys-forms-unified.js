@@ -10,7 +10,8 @@
 (function () {
   'use strict';
 
-  const VERSION = '4.3.2';
+  const VERSION = '4.3.4';
+  const MAX_VISIBLE_SUGGESTIONS = 12;
 
   const FORM_TYPES = {
     REGISTRO_DDHH: { webhookKey: 'REGISTRO_DDHH', casePrefix: 'BAJA', responseKey: 'RESPONSE_ID_DDHH', label: 'Registro DDHH' },
@@ -69,14 +70,39 @@
     return (byCode.get(codePart) || []).filter(isAllowed);
   }
 
-  /** Búsqueda parcial rápida por código, nombre, país o empresa. */
+  /**
+   * Búsqueda parcial rápida por código, nombre, país o empresa.
+   * Un único carácter sólo consulta códigos para responder al instante.
+   */
   function findSuggestions(value) {
     const query = normalizeSearch(value);
     const terms = query.split(' ').filter(Boolean);
-    if (!terms.length || query.length < 2) return [];
+    if (!terms.length) return [];
+    const quickCodeSearch = terms.length === 1 && query.length === 1 && /^[A-Z0-9]$/.test(query);
+    if (query.length < 2 && !quickCodeSearch) return [];
+
+    // La primera tecla debe sentirse inmediata. Priorizamos códigos que
+    // comienzan con ella y detenemos la búsqueda al reunir 12 opciones.
+    if (quickCodeSearch) {
+      const startsWith = [];
+      const contains = [];
+      for (const entry of searchIndex) {
+        if (!isAllowed(entry.emp)) continue;
+        const code = normalizeSearch(entry.emp.CODIGO_EMPLEADO);
+        if (code.startsWith(query)) {
+          startsWith.push(entry.emp);
+          if (startsWith.length === MAX_VISIBLE_SUGGESTIONS) return startsWith;
+        } else if (code.includes(query) && contains.length < MAX_VISIBLE_SUGGESTIONS) {
+          contains.push(entry.emp);
+        }
+      }
+      return startsWith.length ? startsWith : contains;
+    }
+
     const matches = [];
     for (const entry of searchIndex) {
-      if (isAllowed(entry.emp) && terms.every((term) => entry.text.includes(term))) matches.push(entry.emp);
+      if (!isAllowed(entry.emp)) continue;
+      if (terms.every((term) => entry.text.includes(term))) matches.push(entry.emp);
     }
     const relevance = (emp) => {
       const code = normalizeSearch(emp.CODIGO_EMPLEADO);
@@ -93,7 +119,7 @@
       const activeA = String(a.ESTADO_COLABORADOR).toUpperCase() === 'ACTIVO' ? 0 : 1;
       const activeB = String(b.ESTADO_COLABORADOR).toUpperCase() === 'ACTIVO' ? 0 : 1;
       return score || activeA - activeB || String(a.NOMBRE_COMPLETO).localeCompare(String(b.NOMBRE_COMPLETO), 'es');
-    });
+    }).slice(0, MAX_VISIBLE_SUGGESTIONS);
   }
 
   /** Devuelve la persona sólo si la búsqueda es inequívoca. */
@@ -140,13 +166,13 @@
   // Mensajes en pantalla
   // ------------------------------------------------------------------
   let toastTimer = null;
-  function showToast(message, type = 'info') {
+  function showToast(message, type = 'info', heading = '') {
     const toast = $('[data-toast]');
     if (!toast) return;
     toast.className = `toast ${type}`;
     toast.textContent = '';
     const title = document.createElement('strong');
-    title.textContent = type === 'error' ? 'Revisa esto' : type === 'success' ? 'Listo' : 'Aviso';
+    title.textContent = heading || (type === 'error' ? 'Revisa esto' : type === 'success' ? 'Listo' : 'Aviso');
     const body = document.createElement('span');
     body.textContent = message;
     toast.append(title, body);
@@ -286,7 +312,7 @@
     const host = $('[data-lookup-matches]');
     if (!host) return;
     host.textContent = '';
-    matches.slice(0, 12).forEach((emp) => {
+    matches.slice(0, MAX_VISIBLE_SUGGESTIONS).forEach((emp) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       const primary = document.createElement('span');
@@ -315,7 +341,9 @@
     const value = input.value;
     const key = normalizeCode(value);
     if (key === lastLookupKey && !(final && !key)) {
-      if (final && key && !currentEmployee && !findCandidates(value).length) input.classList.add('invalid');
+      if (final && key && !currentEmployee && !findCandidates(value).length && !findSuggestions(value).length) {
+        input.classList.add('invalid');
+      }
       return;
     }
     lastLookupKey = key;
@@ -339,13 +367,16 @@
 
     const suggestions = findSuggestions(value);
     if (suggestions.length) {
-      const shown = Math.min(suggestions.length, 12);
-      setLookupStatus(`${suggestions.length} coincidencia${suggestions.length === 1 ? '' : 's'}; mostrando ${shown}.`);
+      const shown = Math.min(suggestions.length, MAX_VISIBLE_SUGGESTIONS);
+      const prefix = key.length === 1
+        ? 'Coincidencias por código'
+        : `${suggestions.length} coincidencia${suggestions.length === 1 ? '' : 's'}`;
+      setLookupStatus(`${prefix} · ${shown} visibles. Elige una persona.`);
       showMatches(suggestions);
       return;
     }
 
-    if (final || key.length >= 4) {
+    if (final || key.length >= 2) {
       setLookupStatus('No se encontró ese código en el maestro.', 'error');
       if (final) input.classList.add('invalid');
     } else {
@@ -580,7 +611,15 @@
       showScreen('result');
     } catch (error) {
       console.error('[ASYS] Error al guardar', error.status, error.message);
-      showToast(friendlyError(error), 'error');
+      if (error.status === 409) {
+        showToast(
+          'Ya hay un caso abierto para este código. Para registrar una segunda baja, el flujo de Power Automate debe habilitar duplicados.',
+          'error',
+          'Caso ya abierto'
+        );
+      } else {
+        showToast(friendlyError(error), 'error');
+      }
     } finally {
       submitting = false;
       button.disabled = !webhookURL(currentFormType);
@@ -643,7 +682,7 @@
       let lookupTimer = null;
       input.addEventListener('input', () => {
         clearTimeout(lookupTimer);
-        lookupTimer = setTimeout(() => handleLookupInput(false), 70);
+        lookupTimer = setTimeout(() => handleLookupInput(false), 35);
       });
       input.addEventListener('change', () => {
         clearTimeout(lookupTimer);
