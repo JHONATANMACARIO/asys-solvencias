@@ -443,6 +443,7 @@
     }
     if (params.id_proceso_baja) {
       showBanner('Caso ' + params.id_proceso_baja, 'Tu respuesta quedará vinculada a este caso.', 'info');
+      showScreen('form');
     }
   }
 
@@ -568,6 +569,8 @@
       data.TOKEN_SEGURIDAD = correlation.token;
       data[cfg.responseKey] = uniqueId(cfg.casePrefix);
       data.TIPO_REGISTRO = currentFormType === 'SOLVENCIA_LIDER' ? 'LIDER' : 'WORKFORCE';
+      data.RESPONDEDOR_EMAIL = (currentEmployee && currentEmployee.LIDER_CORREO) ? currentEmployee.LIDER_CORREO : '';
+      data.CORREO_LIDER = (currentEmployee && currentEmployee.LIDER_CORREO) ? currentEmployee.LIDER_CORREO : '';
     }
     return data;
   }
