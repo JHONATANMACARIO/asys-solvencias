@@ -231,6 +231,8 @@
     if (!response.ok || body.ok === false) {
       const error = new Error(String(body.mensaje || body.message || body.error?.message || '').slice(0, 200));
       error.status = response.status;
+      error.code = String(body.codigo || body.error?.code || '');
+      error.reference = String(body.referencia || '');
       throw error;
     }
     return body;
@@ -240,8 +242,12 @@
     switch (error.status) {
       case 0: return error.message;
       case 400: return error.message || 'Algún dato no es válido. Revisa el formulario.';
-      case 401:
-      case 403: return 'El enlace no es válido o ya venció. Usa el enlace que llegó por correo.';
+      case 401: return 'Power Automate bloqueó el acceso al flujo. El responsable debe revisar que el disparador permita el enlace público y que la URL esté vigente.';
+      case 403:
+        if (error.code === 'Validar_enlace') {
+          return 'El flujo recibió el envío, pero el código o el token del enlace no corresponde al caso. Abre el enlace original de ese correo.';
+        }
+        return error.message || 'Power Automate rechazó el acceso al flujo (403). Verifica que el enlace del correo sea el actual.';
       case 404: return 'El caso no existe o ya fue cerrado.';
       case 409: return error.message || 'Ya existe un registro para este colaborador.';
       default: return 'El servidor no pudo guardar el registro. Inténtalo de nuevo en unos minutos.';
@@ -477,6 +483,21 @@
     $$('input[type="number"]', form).forEach((field) => {
       if (field.value !== '' && Number(field.value) < 0) errors.push(`"${labelOf(field)}" no puede ser negativo.`);
     });
+    if (currentFormType === 'SOLVENCIA_LIDER' || currentFormType === 'SOLVENCIA_WORKFORCE') {
+      const dateRequirements = [
+        ['HORAS_EXTRAS_CANTIDAD', 'HORAS_EXTRAS_FECHAS', 'Indica las fechas de las horas extras cuando la cantidad sea mayor que cero.'],
+        ['AUSENCIAS_CANTIDAD', 'AUSENCIAS_FECHAS', 'Indica las fechas de las ausencias cuando la cantidad sea mayor que cero.']
+      ];
+      dateRequirements.forEach(([quantityName, datesName, message]) => {
+        const quantity = Number(data[quantityName] || 0);
+        const dates = String(data[datesName] || '').trim();
+        const dateField = form.elements.namedItem(datesName);
+        if (Number.isFinite(quantity) && quantity > 0 && !dates) {
+          dateField?.classList.add('invalid');
+          errors.push(message);
+        }
+      });
+    }
     $$('input[type="email"]', form).forEach((field) => {
       const v = field.value.trim();
       if (v && !EMAIL_RE.test(v)) errors.push(`"${labelOf(field)}" no tiene un formato de correo válido.`);
@@ -616,7 +637,7 @@
       console.error('[ASYS] Error al guardar', error.status, error.message);
       if (error.status === 409) {
         showToast(
-          'Ya hay un caso abierto para este código. Para registrar una segunda baja, el flujo de Power Automate debe habilitar duplicados.',
+          'Ya existe una baja abierta para este colaborador. No registres otra baja: completa la solicitud usando los enlaces de Líder y Workforce enviados para este mismo caso.',
           'error',
           'Caso ya abierto'
         );
