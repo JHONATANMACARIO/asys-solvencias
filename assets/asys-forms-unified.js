@@ -670,7 +670,11 @@
     clearMatches();
     setLookupStatus('');
     $$('.invalid', form).forEach((el) => el.classList.remove('invalid'));
-    $$('.date-list', form).forEach((widget) => renderDateList(widget, []));
+    // Limpiar dataset y lista de fechas al resetear el formulario
+    $$('.date-list', form).forEach((widget) => {
+      widget.dataset.entries = '';
+      renderDateList(widget, []);
+    });
   }
 
   // Reemplaza los campos de fecha escritos a mano por selectores nativos de calendario.
@@ -680,6 +684,8 @@
     const output = $('.date-list-output', widget);
     const list = $('.date-list-items', widget);
     if (!output || !list) return;
+    // Guardar en dataset para sobrevivir a form.reset() que vacía el textarea
+    widget.dataset.entries = entries.join('\n');
     output.value = entries.join('\n');
     list.hidden = entries.length === 0;
     list.replaceChildren();
@@ -693,12 +699,15 @@
       remove.className = 'date-chip-remove';
       remove.setAttribute('aria-label', `Quitar fecha ${entry}`);
       remove.textContent = '×';
-      remove.addEventListener('click', () => {
-        const current = output.value.split('\n').filter(Boolean);
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Leer siempre desde dataset, no desde output.value (puede estar vacío tras reset)
+        const current = (widget.dataset.entries || '').split('\n').filter(Boolean);
         current.splice(index, 1);
         renderDateList(widget, current);
         widget.classList.remove('invalid');
-        output.dispatchEvent(new Event('change', { bubbles: true }));
+        output.dispatchEvent(new Event('change', { bubbles: false }));
+        updateProgress();
       });
       item.append(text, remove);
       list.appendChild(item);
@@ -752,7 +761,8 @@
       widget.append(row, list);
       output.insertAdjacentElement('afterend', widget);
 
-      add.addEventListener('click', () => {
+      add.addEventListener('click', (e) => {
+        e.stopPropagation();
         if (!picker.value) {
           picker.classList.add('invalid');
           picker.focus();
@@ -762,13 +772,17 @@
         const [year, month, day] = picker.value.split('-');
         const date = `${day}/${month}/${year}`;
         const entry = note?.value.trim() ? `${date} - ${note.value.trim()}` : date;
-        const entries = output.value.split('\n').filter(Boolean);
-        if (!entries.includes(entry)) entries.push(entry);
-        renderDateList(widget, entries);
+        // Leer siempre desde el dataset para evitar que form.reset() vacíe output.value antes de leer
+        const current = widget.dataset.entries ? widget.dataset.entries.split('\n').filter(Boolean) : output.value.split('\n').filter(Boolean);
+        if (!current.includes(entry)) current.push(entry);
+        widget.dataset.entries = current.join('\n');
+        renderDateList(widget, current);
         widget.classList.remove('invalid');
         picker.value = '';
         if (note) note.value = '';
-        output.dispatchEvent(new Event('change', { bubbles: true }));
+        // Dispatch sin burbujeo para no disparar el listener de change del form
+        output.dispatchEvent(new Event('change', { bubbles: false }));
+        updateProgress();
       });
       picker.addEventListener('change', () => picker.classList.remove('invalid'));
       renderDateList(widget, output.value.split('\n').filter(Boolean));
