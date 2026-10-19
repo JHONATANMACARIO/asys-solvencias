@@ -636,11 +636,19 @@
     } catch (error) {
       console.error('[ASYS] Error al guardar', error.status, error.message);
       if (error.status === 409) {
-        showToast(
-          'Ya existe una baja abierta para este colaborador. No registres otra baja: completa la solicitud usando los enlaces de Líder y Workforce enviados para este mismo caso.',
-          'error',
-          'Caso ya abierto'
-        );
+        if (currentFormType === 'REGISTRO_DDHH') {
+          showToast(
+            'Ya existe una baja abierta para este colaborador. No registres otra baja: completa la solicitud usando los enlaces de Líder y Workforce enviados para este mismo caso.',
+            'error',
+            'Caso ya abierto'
+          );
+        } else {
+          showToast(
+            error.message || 'El caso ya fue procesado o no está en espera de esta respuesta.',
+            'error',
+            'Respuesta no procesada'
+          );
+        }
       } else {
         showToast(friendlyError(error), 'error');
       }
