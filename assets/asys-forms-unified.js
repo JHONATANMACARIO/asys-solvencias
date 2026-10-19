@@ -493,7 +493,7 @@
         const dates = String(data[datesName] || '').trim();
         const dateField = form.elements.namedItem(datesName);
         if (Number.isFinite(quantity) && quantity > 0 && !dates) {
-          dateField?.classList.add('invalid');
+          dateField?.closest('.date-list')?.classList.add('invalid');
           errors.push(message);
         }
       });
@@ -670,6 +670,109 @@
     clearMatches();
     setLookupStatus('');
     $$('.invalid', form).forEach((el) => el.classList.remove('invalid'));
+    $$('.date-list', form).forEach((widget) => renderDateList(widget, []));
+  }
+
+  // Reemplaza los campos de fecha escritos a mano por selectores nativos de calendario.
+  // El textarea original se conserva oculto y con el mismo name para no alterar el contrato
+  // con Power Automate; su valor se genera como una fecha DD/MM/AAAA por línea.
+  function renderDateList(widget, entries) {
+    const output = $('.date-list-output', widget);
+    const list = $('.date-list-items', widget);
+    if (!output || !list) return;
+    output.value = entries.join('\n');
+    list.hidden = entries.length === 0;
+    list.replaceChildren();
+    entries.forEach((entry, index) => {
+      const item = document.createElement('li');
+      item.className = 'date-chip';
+      const text = document.createElement('span');
+      text.textContent = entry;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'date-chip-remove';
+      remove.setAttribute('aria-label', `Quitar fecha ${entry}`);
+      remove.textContent = '×';
+      remove.addEventListener('click', () => {
+        const current = output.value.split('\n').filter(Boolean);
+        current.splice(index, 1);
+        renderDateList(widget, current);
+        widget.classList.remove('invalid');
+        output.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      item.append(text, remove);
+      list.appendChild(item);
+    });
+  }
+
+  function bindDateLists(form) {
+    const definitions = [
+      { id: 'horasExtrasFechas', detail: true, detailLabel: 'Detalle / horas de ese día (opcional)' },
+      { id: 'ausenciasFechas' },
+      { id: 'ausencias' }
+    ];
+    definitions.forEach(({ id, detail, detailLabel }) => {
+      const output = document.getElementById(id);
+      if (!output || !form.contains(output)) return;
+      const widget = document.createElement('div');
+      widget.className = 'date-list';
+      widget.setAttribute('role', 'group');
+      widget.setAttribute('aria-label', output.labels?.[0]?.textContent.trim() || 'Fechas');
+      output.classList.add('date-list-output');
+      output.hidden = true;
+
+      const row = document.createElement('div');
+      row.className = `date-list-controls${detail ? ' has-detail' : ''}`;
+      const picker = document.createElement('input');
+      picker.type = 'date';
+      picker.id = `${id}Calendar`;
+      picker.className = 'control date-list-picker';
+      picker.setAttribute('aria-label', 'Seleccionar fecha en calendario');
+      output.labels?.forEach((label) => { label.htmlFor = picker.id; });
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'btn btn-secondary date-list-add';
+      add.textContent = 'Agregar fecha';
+      row.append(picker);
+      let note = null;
+      if (detail) {
+        note = document.createElement('input');
+        note.type = 'text';
+        note.className = 'control date-list-detail';
+        note.maxLength = 100;
+        note.placeholder = detailLabel;
+        note.setAttribute('aria-label', detailLabel);
+        row.append(note);
+      }
+      row.append(add);
+      const list = document.createElement('ul');
+      list.className = 'date-list-items';
+      list.setAttribute('aria-live', 'polite');
+      list.hidden = true;
+      widget.append(row, list);
+      output.insertAdjacentElement('afterend', widget);
+
+      add.addEventListener('click', () => {
+        if (!picker.value) {
+          picker.classList.add('invalid');
+          picker.focus();
+          return;
+        }
+        picker.classList.remove('invalid');
+        const [year, month, day] = picker.value.split('-');
+        const date = `${day}/${month}/${year}`;
+        const entry = note?.value.trim() ? `${date} - ${note.value.trim()}` : date;
+        const entries = output.value.split('\n').filter(Boolean);
+        if (!entries.includes(entry)) entries.push(entry);
+        renderDateList(widget, entries);
+        widget.classList.remove('invalid');
+        picker.value = '';
+        if (note) note.value = '';
+        output.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      picker.addEventListener('change', () => picker.classList.remove('invalid'));
+      renderDateList(widget, output.value.split('\n').filter(Boolean));
+    });
   }
 
   // ------------------------------------------------------------------
@@ -722,6 +825,7 @@
       });
     }
     if (form) {
+      bindDateLists(form);
       form.addEventListener('submit', handleSubmit);
       form.addEventListener('input', updateProgress);
       form.addEventListener('change', updateProgress);
