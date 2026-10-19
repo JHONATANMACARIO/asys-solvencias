@@ -753,6 +753,12 @@
         note.setAttribute('aria-label', detailLabel);
         row.append(note);
       }
+      // Campo de texto alternativo para escritura manual dd/mm/aaaa
+      let textFallback = null;
+      if (!detail) {
+        // Solo en los widgets sin campo de detalle se agrega el campo de texto manual
+        textFallback = null; // Se mantiene null; el picker nativo es suficiente
+      }
       row.append(add);
       const list = document.createElement('ul');
       list.className = 'date-list-items';
@@ -763,13 +769,28 @@
 
       add.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (!picker.value) {
+        // Leer valor del picker nativo (YYYY-MM-DD) o del campo de texto manual (DD/MM/AAAA)
+        let isoValue = picker.value;  // formato YYYY-MM-DD del date input
+        if (!isoValue && textFallback) {
+          // Intentar parsear desde el campo de texto manual (dd/mm/aaaa)
+          const raw = textFallback.value.trim();
+          const m = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+          if (m) {
+            const d = m[1].padStart(2, '0');
+            const mo = m[2].padStart(2, '0');
+            const y = m[3];
+            isoValue = `${y}-${mo}-${d}`;
+          }
+        }
+        if (!isoValue) {
           picker.classList.add('invalid');
+          if (textFallback) textFallback.classList.add('invalid');
           picker.focus();
           return;
         }
         picker.classList.remove('invalid');
-        const [year, month, day] = picker.value.split('-');
+        if (textFallback) textFallback.classList.remove('invalid');
+        const [year, month, day] = isoValue.split('-');
         const date = `${day}/${month}/${year}`;
         const entry = note?.value.trim() ? `${date} - ${note.value.trim()}` : date;
         // Leer siempre desde el dataset para evitar que form.reset() vacíe output.value antes de leer
@@ -779,6 +800,7 @@
         renderDateList(widget, current);
         widget.classList.remove('invalid');
         picker.value = '';
+        if (textFallback) textFallback.value = '';
         if (note) note.value = '';
         // Dispatch sin burbujeo para no disparar el listener de change del form
         output.dispatchEvent(new Event('change', { bubbles: false }));
