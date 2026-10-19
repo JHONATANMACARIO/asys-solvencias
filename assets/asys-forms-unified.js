@@ -677,16 +677,39 @@
     });
   }
 
-  // Reemplaza los campos de fecha escritos a mano por selectores nativos de calendario.
-  // El textarea original se conserva oculto y con el mismo name para no alterar el contrato
-  // con Power Automate; su valor se genera como una fecha DD/MM/AAAA por línea.
+  // ------------------------------------------------------------------
+  // Manejo de listas de fechas dinámicas
+  // ------------------------------------------------------------------
+  function parseDateInput(val) {
+    if (!val) return null;
+    const s = String(val).trim();
+    // YYYY-MM-DD (selector nativo de fecha o ISO)
+    let m = s.match(/^(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})$/);
+    if (m) {
+      const y = m[1], mo = m[2].padStart(2, '0'), d = m[3].padStart(2, '0');
+      return `${d}/${mo}/${y}`;
+    }
+    // DD/MM/YYYY (escritura manual o formato visual)
+    m = s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/);
+    if (m) {
+      const d = m[1].padStart(2, '0'), mo = m[2].padStart(2, '0'), y = m[3];
+      return `${d}/${mo}/${y}`;
+    }
+    return null;
+  }
+
+  function getOutputElement(widget) {
+    return $('.date-list-output', widget) ||
+           (widget.previousElementSibling?.classList.contains('date-list-output') ? widget.previousElementSibling : null) ||
+           (widget.parentElement?.querySelector('.date-list-output') || null);
+  }
+
   function renderDateList(widget, entries) {
-    const output = $('.date-list-output', widget);
+    const output = getOutputElement(widget);
     const list = $('.date-list-items', widget);
-    if (!output || !list) return;
-    // Guardar en dataset para sobrevivir a form.reset() que vacía el textarea
+    if (!list) return;
     widget.dataset.entries = entries.join('\n');
-    output.value = entries.join('\n');
+    if (output) output.value = entries.join('\n');
     list.hidden = entries.length === 0;
     list.replaceChildren();
     entries.forEach((entry, index) => {
@@ -701,12 +724,15 @@
       remove.textContent = '×';
       remove.addEventListener('click', (e) => {
         e.stopPropagation();
-        // Leer siempre desde dataset, no desde output.value (puede estar vacío tras reset)
         const current = (widget.dataset.entries || '').split('\n').filter(Boolean);
         current.splice(index, 1);
         renderDateList(widget, current);
         widget.classList.remove('invalid');
-        output.dispatchEvent(new Event('change', { bubbles: false }));
+        const out = getOutputElement(widget);
+        if (out) {
+          out.value = widget.dataset.entries;
+          out.dispatchEvent(new Event('change', { bubbles: false }));
+        }
         updateProgress();
       });
       item.append(text, remove);
@@ -723,6 +749,10 @@
     definitions.forEach(({ id, detail, detailLabel }) => {
       const output = document.getElementById(id);
       if (!output || !form.contains(output)) return;
+
+      const next = output.nextElementSibling;
+      if (next && next.classList.contains('date-list')) next.remove();
+
       const widget = document.createElement('div');
       widget.className = 'date-list';
       widget.setAttribute('role', 'group');
@@ -730,18 +760,31 @@
       output.classList.add('date-list-output');
       output.hidden = true;
 
+      output.insertAdjacentElement('afterend', widget);
+      widget.prepend(output);
+
       const row = document.createElement('div');
       row.className = `date-list-controls${detail ? ' has-detail' : ''}`;
+
       const picker = document.createElement('input');
       picker.type = 'date';
       picker.id = `${id}Calendar`;
       picker.className = 'control date-list-picker';
       picker.setAttribute('aria-label', 'Seleccionar fecha en calendario');
       output.labels?.forEach((label) => { label.htmlFor = picker.id; });
+
       const add = document.createElement('button');
       add.type = 'button';
       add.className = 'btn btn-secondary date-list-add';
       add.textContent = 'Agregar fecha';
+
+      picker.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          add.click();
+        }
+      });
+
       row.append(picker);
       let note = null;
       if (detail) {
@@ -751,61 +794,47 @@
         note.maxLength = 100;
         note.placeholder = detailLabel;
         note.setAttribute('aria-label', detailLabel);
+        note.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            add.click();
+          }
+        });
         row.append(note);
       }
-      // Campo de texto alternativo para escritura manual dd/mm/aaaa
-      let textFallback = null;
-      if (!detail) {
-        // Solo en los widgets sin campo de detalle se agrega el campo de texto manual
-        textFallback = null; // Se mantiene null; el picker nativo es suficiente
-      }
       row.append(add);
+
       const list = document.createElement('ul');
       list.className = 'date-list-items';
       list.setAttribute('aria-live', 'polite');
       list.hidden = true;
+
       widget.append(row, list);
-      output.insertAdjacentElement('afterend', widget);
 
       add.addEventListener('click', (e) => {
+        e.preventDefault();
         e.stopPropagation();
-        // Leer valor del picker nativo (YYYY-MM-DD) o del campo de texto manual (DD/MM/AAAA)
-        let isoValue = picker.value;  // formato YYYY-MM-DD del date input
-        if (!isoValue && textFallback) {
-          // Intentar parsear desde el campo de texto manual (dd/mm/aaaa)
-          const raw = textFallback.value.trim();
-          const m = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-          if (m) {
-            const d = m[1].padStart(2, '0');
-            const mo = m[2].padStart(2, '0');
-            const y = m[3];
-            isoValue = `${y}-${mo}-${d}`;
-          }
-        }
-        if (!isoValue) {
+        const formatted = parseDateInput(picker.value);
+        if (!formatted) {
           picker.classList.add('invalid');
-          if (textFallback) textFallback.classList.add('invalid');
           picker.focus();
+          showToast('Selecciona una fecha en el calendario antes de agregar.', 'error', 'Fecha requerida');
           return;
         }
         picker.classList.remove('invalid');
-        if (textFallback) textFallback.classList.remove('invalid');
-        const [year, month, day] = isoValue.split('-');
-        const date = `${day}/${month}/${year}`;
-        const entry = note?.value.trim() ? `${date} - ${note.value.trim()}` : date;
-        // Leer siempre desde el dataset para evitar que form.reset() vacíe output.value antes de leer
+        const entry = note?.value.trim() ? `${formatted} - ${note.value.trim()}` : formatted;
         const current = widget.dataset.entries ? widget.dataset.entries.split('\n').filter(Boolean) : output.value.split('\n').filter(Boolean);
         if (!current.includes(entry)) current.push(entry);
         widget.dataset.entries = current.join('\n');
+        output.value = widget.dataset.entries;
         renderDateList(widget, current);
         widget.classList.remove('invalid');
         picker.value = '';
-        if (textFallback) textFallback.value = '';
         if (note) note.value = '';
-        // Dispatch sin burbujeo para no disparar el listener de change del form
         output.dispatchEvent(new Event('change', { bubbles: false }));
         updateProgress();
       });
+
       picker.addEventListener('change', () => picker.classList.remove('invalid'));
       renderDateList(widget, output.value.split('\n').filter(Boolean));
     });
