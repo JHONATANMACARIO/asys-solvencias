@@ -218,7 +218,8 @@
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        body: JSON.stringify(data),
+        keepalive: true
       });
     } catch {
       const error = new Error('No se pudo conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.');
@@ -625,14 +626,23 @@
     button.disabled = true;
     button.innerHTML = '<span class="spinner" aria-hidden="true"></span>Guardando…';
 
+    const id = payload.ID_PROCESO_BAJA || payload.itemId || payload.id || 'REGISTRANDO';
+    const idEl = [data-result-id];
+    if (idEl) idEl.textContent = id;
+
+    // Transicion inmediata a pantalla de exito (el usuario no espera con la ruedita)
+    setTimeout(() => {
+      resetForm(form);
+      [data-toast]?.classList.remove('show');
+      showScreen('result');
+    }, 400);
+
+    // Envio y confirmacion en segundo plano (Power Automate sigue su curso 100% intacto)
     try {
       const result = await sendToWebhook(payload, url);
-      const id = result.idProcesoBaja || result.ID_PROCESO_BAJA || result.itemId || result.id || payload.ID_PROCESO_BAJA;
-      const idEl = $('[data-result-id]');
-      if (idEl) idEl.textContent = id;
-      resetForm(form);
-      $('[data-toast]')?.classList.remove('show');
-      showScreen('result');
+      const finalId = result.idProcesoBaja || result.ID_PROCESO_BAJA || result.itemId || result.id || id;
+      if (idEl) idEl.textContent = finalId;
+      console.log('[ASYS] Confirmacion recibida en segundo plano:', result);
     } catch (error) {
       console.error('[ASYS] Error al guardar', error.status, error.message);
       if (error.status === 409) {
