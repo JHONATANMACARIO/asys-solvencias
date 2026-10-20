@@ -627,13 +627,13 @@
     button.innerHTML = '<span class="spinner" aria-hidden="true"></span>Guardando…';
 
     const id = payload.ID_PROCESO_BAJA || payload.itemId || payload.id || 'REGISTRANDO';
-    const idEl = [data-result-id];
+    const idEl = $('[data-result-id]');
     if (idEl) idEl.textContent = id;
 
     // Transicion inmediata a pantalla de exito (el usuario no espera con la ruedita)
     setTimeout(() => {
       resetForm(form);
-      [data-toast]?.classList.remove('show');
+      $('[data-toast]')?.classList.remove('show');
       showScreen('result');
     }, 400);
 
